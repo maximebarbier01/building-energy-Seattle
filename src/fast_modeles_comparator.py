@@ -57,7 +57,7 @@ def make_preprocessor(numeric_features, categorical_features, sparse_output=Fals
     preprocessor = ColumnTransformer(
         transformers=[
             ("num", numeric_pipeline, numeric_features),
-            ("cat", categorical_pipeline, categorical_features)
+            ("cat", categorical_pipeline, categorical_features),
         ],
         remainder="drop"
     )
@@ -115,18 +115,16 @@ def make_pipeline(preprocessor, model, use_log_target=False):
 # =========================
 
 @timeit
-def cross_validation(pipe, param_grid, X_train, y_train, seed=42, cv=5):
-    gs = GridSearchCV(
-        estimator=pipe,
-        param_grid=param_grid,
-        scoring="neg_root_mean_squared_error",  # RMSE (CV)
-        cv=cv,
-        n_jobs=-1,
-        refit=True,
-        verbose=0
+def quick_cv(pipe, X_train, y_train):
+    scores = cross_val_score(
+        pipe,
+        X_train,
+        y_train,
+        cv=5,
+        scoring="neg_root_mean_squared_error",
+        n_jobs=-1
     )
-    gs.fit(X_train, y_train)
-    return gs
+    return -scores.mean()
 
 # =========================
 # 4) Model comparator
@@ -155,7 +153,7 @@ def compare_models(
             grid = {f"model__{k}": v for k, v in grid.items()}
 
         if grid:
-            gs = cross_validation(pipe, grid, X_train, y_train, seed=seed, cv=cv)
+            gs = quick_cv(pipe, X_train, y_train)
             best_est = gs.best_estimator_
             best_cv_rmse = -float(gs.best_score_)
             best_params = gs.best_params_
@@ -172,7 +170,6 @@ def compare_models(
             "cv_rmse": best_cv_rmse,
             **test_metrics,
             "best_params": best_params,
-            "estimator": best_est,   # on stocke le pipeline fitted
         })
 
     return pd.DataFrame(rows).sort_values(["RMSE", "MAE"], ascending=True)
