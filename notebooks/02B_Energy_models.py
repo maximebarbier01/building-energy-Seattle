@@ -85,6 +85,8 @@ importlib.reload(of)
 pd.set_option("display.max_columns", None)
 pd.options.display.float_format = "{:,.2f}".format
 
+# Import de la table
+
 df_backup = pd.read_csv(
     "/home/maxime/projects/building-energy-Seattle/data/processed/data_to_use.csv"
 )
@@ -106,9 +108,9 @@ numeric_features = [
     "building_age",
     "buildings_gfa_ratio",
     "parking_gfa_ratio",
-    "gas_prop",
-    "elec_prop",
-    "steam_prop",
+#    "gas_prop", suppression car leakage (calculé sur target)
+#    "elec_prop",
+#    "steam_prop",
 ]
 
 categorical_features = [
