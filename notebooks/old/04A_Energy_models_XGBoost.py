@@ -12,7 +12,6 @@ import time
 # Machine Learning
 # =========================
 import lightgbm as lgb
-from catboost import CatBoostRegressor
 
 # =========================
 # Visualisation
@@ -58,7 +57,6 @@ from sklearn.model_selection import (
     train_test_split,
     RandomizedSearchCV,
     cross_val_score,
-    RepeatedKFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
@@ -173,7 +171,7 @@ preprocessor = ColumnTransformer(
 # 4) Modelling
 
 # Entraînement simple
-modele = XGBRegressor(random_state=42, n_jobs=-1)  # Paramètres par défaut
+modele = XGBRegressor(random_state=57, n_jobs=-1)  # Paramètres par défaut
 
 pipe = Pipeline(
     steps=[
@@ -181,132 +179,6 @@ pipe = Pipeline(
         ("model", modele),
     ]
 )
-
-# *****************************************
-# *         Parte 1 :: modele de base     *
-# *****************************************
-
-modele = XGBRegressor(
-    objective="reg:squarederror",
-    n_estimators=1000,
-    learning_rate=0.03,
-    max_depth=4,
-    min_child_weight=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    reg_alpha=0.0,
-    reg_lambda=5.0,
-    gamma=0.0,
-    tree_method="hist",
-    random_state=42,
-    n_jobs=-1,
-)
-
-xgb = Pipeline(
-    steps=[
-        ("prep", preprocessor),
-        ("model", modele),
-    ]
-)
-
-xgb.fit(X_train, y_train)
-
-y_pred = xgb.predict(X_test)
-
-print(
-    f"R² : {xgb.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {xgb.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
-)
-print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
-
-# ! R² : 0.000 (train) et  -0.000  (test)
-# ! RMSE : 1.215e+07
-# ! MAE : 7.278e+06
-
-# **************************************************
-# *         Parte 2 :: modele anti-overfitting     *
-# **************************************************
-
-modele = XGBRegressor(
-    objective="reg:squarederror",
-    n_estimators=1000,
-    learning_rate=0.03,
-    max_depth=4,
-    min_child_weight=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    reg_alpha=0.0,
-    reg_lambda=5.0,
-    gamma=0.0,
-    tree_method="hist",
-    random_state=42,
-    n_jobs=-1,
-)
-
-xgb = Pipeline(
-    steps=[
-        ("prep", preprocessor),
-        ("model", modele),
-    ]
-)
-
-xgb.fit(X_train, y_train)
-
-y_pred = xgb.predict(X_test)
-
-print(
-    f"R² : {xgb.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {xgb.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
-)
-print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
-
-# ! R² : 0.000 (train) et  -0.000  (test)
-# ! RMSE : 1.215e+07
-# ! MAE : 7.278e+06
-
-# *************************************************
-# *           Parte 3 :: Validation croisée       *
-# *************************************************
-
-# 2) split train/val
-
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train, y_train, test_size=0.2, random_state=seed
-)
-
-cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
-
-scores_te = []
-scores_tr = []
-
-for train_idx, test_idx in cv.split(X):
-    X_tr = X.iloc[train_idx]
-    X_te = X.iloc[test_idx]
-    y_tr = y.iloc[train_idx]
-    y_te = y.iloc[test_idx]
-
-    model = modele
-
-    model.fit(X_tr, y_tr)
-
-    y_pred_te = model.predict(X_te)
-    scores_te.append(r2_score(y_te, y_pred_te))
-
-    y_pred_tr = model.predict(X_tr)
-    scores_tr.append(r2_score(y_tr, y_pred_tr))
-
-print("R² train CV mean:", np.mean(scores_tr).round(2))
-print("R² test CV mean:", np.mean(scores_te).round(2))
-print("R² train CV std :", np.std(scores_tr).round(2))
-print("R² test CV std :", np.std(scores_te).round(2))
-
-# ! Résultats :
-# ! R² CV mean : 0.0 (train) et -0.01 (test)
-# ! R² train CV std : 0.0 (train) et 0.01 (test)
-
-# *************************************************
-# *             Parte 4 :: GridSearch CV          *
-# *************************************************
 
 # Grid Search CV
 
@@ -339,10 +211,24 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-best_param = gs.best_params_
+# RandomizedSearchCV
 
-xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 
-# ! R² : 0.953 (train) et  0.575  (test)
-# ! RMSE : 7.922e+06
-# ! MAE : 3.743e+06
+best_param = random_search.best_params_
+
+scores = cross_val_score(best_model, X, y, cv=5, scoring="r2")
+
+scores.mean(), scores.std()
+
+from sklearn.model_selection import RepeatedKFold, cross_val_score
+
+cv = RepeatedKFold(n_splits=5, n_repeats=10, random_state=42)
+
+scores = cross_val_score(best_model, X, y, cv=cv, scoring="r2", n_jobs=-1)
+
+scores.mean(), scores.std()
+
+
+# ! R² : 1.000 (train) et  0.438  (test)
+# ! RMSE : 9.109e+06
+# ! MAE : 4.236e+06

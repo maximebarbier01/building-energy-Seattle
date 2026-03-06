@@ -12,6 +12,7 @@ import time
 # Machine Learning
 # =========================
 import lightgbm as lgb
+from catboost import CatBoostRegressor
 
 # =========================
 # Visualisation
@@ -56,7 +57,8 @@ from sklearn.model_selection import (
     cross_validate,
     train_test_split,
     RandomizedSearchCV,
-    cross_val_score
+    cross_val_score,
+    RepeatedKFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
@@ -126,8 +128,7 @@ numeric_features = [
     #    "steam_prop",
 ]
 
-categorical_features = [ "BuildingType", "PrimaryPropertyGroup"
-]
+categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
 
 col_sel = numeric_features + categorical_features
 X = df[col_sel]
@@ -172,7 +173,7 @@ preprocessor = ColumnTransformer(
 # 4) Modelling
 
 # Entraînement simple
-modele = XGBRegressor(random_state=57, n_jobs=-1)  # Paramètres par défaut
+modele = XGBRegressor(random_state=42, n_jobs=-1)  # Paramètres par défaut
 
 pipe = Pipeline(
     steps=[
@@ -181,14 +182,144 @@ pipe = Pipeline(
     ]
 )
 
+# *****************************************
+# *         Parte 1 :: modele de base     *
+# *****************************************
+
+modele = XGBRegressor(
+    objective="reg:squarederror",
+    n_estimators=1000,
+    learning_rate=0.03,
+    max_depth=4,
+    min_child_weight=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.0,
+    reg_lambda=5.0,
+    gamma=0.0,
+    tree_method="hist",
+    random_state=42,
+    n_jobs=-1,
+)
+
+xgb = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
+)
+
+xgb.fit(X_train, y_train)
+
+y_pred = xgb.predict(X_test)
+
+print(
+    f"R² : {xgb.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {xgb.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
+
+# ! R² : 0.958 (train) et  0.596  (test)
+# ! RMSE : 7.722e+06
+# ! MAE : 3.612e+06
+
+# **************************************************
+# *         Parte 2 :: modele anti-overfitting     *
+# **************************************************
+
+modele = XGBRegressor(
+    objective="reg:squarederror",
+    n_estimators=800,
+    learning_rate=0.03,
+    max_depth=3,
+    min_child_weight=10,
+    subsample=0.7,
+    colsample_bytree=0.7,
+    reg_alpha=0.5,
+    reg_lambda=10.0,
+    gamma=0.1,
+    tree_method="hist",
+    random_state=42,
+    n_jobs=-1,
+)
+
+xgb = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
+)
+
+xgb.fit(X_train, y_train)
+
+y_pred = xgb.predict(X_test)
+
+print(
+    f"R² : {xgb.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {xgb.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
+
+# ! R² : 0.845 (train) et  0.560  (test)
+# ! RMSE : 8.054e+06
+# ! MAE : 3.897e+06
+
+# *************************************************
+# *           Parte 3 :: Validation croisée       *
+# *************************************************
+
+seed = 42
+
+# 2) split train/val
+
+X_tr, X_val, y_tr, y_val = train_test_split(
+    X_train, y_train, test_size=0.2, random_state=seed
+)
+
+cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
+
+scores_te = []
+scores_tr = []
+
+for train_idx, test_idx in cv.split(X):
+    X_tr = X.iloc[train_idx]
+    X_te = X.iloc[test_idx]
+    y_tr = y.iloc[train_idx]
+    y_te = y.iloc[test_idx]
+
+    model = xgb
+
+    model.fit(X_tr, y_tr)
+
+    y_pred_te = model.predict(X_te)
+    scores_te.append(r2_score(y_te, y_pred_te))
+
+    y_pred_tr = model.predict(X_tr)
+    scores_tr.append(r2_score(y_tr, y_pred_tr))
+
+print("R² train CV mean:", np.mean(scores_tr).round(2))
+print("R² test CV mean:", np.mean(scores_te).round(2))
+print("R² train CV std :", np.std(scores_tr).round(2))
+print("R² test CV std :", np.std(scores_te).round(2))
+
+# ! Résultats :
+# ! R² CV mean : 0.83 (train) et 0.57 (test)
+# ! R² train CV std : 0.01 (train) et 0.08 (test)
+
+# *************************************************
+# *             Parte 4 :: GridSearch CV          *
+# *************************************************
+
 # Grid Search CV
 
 param_grid = {
-    "model__n_estimators": [400, 800],
-    "model__max_depth": [4, 6],
-    "model__learning_rate": [0.03, 0.07],
-    "model__subsample": [0.8, 1.0],
-    "model__colsample_bytree": [0.8, 1.0],
+    "model__max_depth": [3, 4, 5],
+    "model__min_child_weight": [3, 5, 10],
+    "model__subsample": [0.7, 0.8, 1.0],
+    "model__colsample_bytree": [0.7, 0.8, 1.0],
+    "model__reg_lambda": [1, 5, 10],
+    "model__n_estimators": [800, 1000, 1200],
+    "model__learning_rate": [0.03],
 }
 
 gs = GridSearchCV(
@@ -212,7 +343,18 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# RandomizedSearchCV
+best_param = gs.best_params_
+
+xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
+
+# ! R² : 0.897 (train) et  0.634  (test)
+# ! RMSE : 7.346e+06
+# ! MAE : 3.516e+06
+
+# *************************************************
+# *         Parte 5 :: RandomizedSearchCV         *
+# *************************************************
+
 
 param_dist = {
     "model__max_depth": randint(3, 10),
@@ -231,9 +373,19 @@ rf_param_dist_safe = {
     "model__n_estimators": [300, 500, 700],
 }
 
+param_grid = {
+    "model__max_depth": [3, 4, 5],
+    "model__min_child_weight": [3, 5, 10],
+    "model__subsample": [0.7, 0.8, 1.0],
+    "model__colsample_bytree": [0.7, 0.8, 1.0],
+    "model__reg_lambda": [1, 5, 10],
+    "model__n_estimators": [800, 1000, 1200],
+    "model__learning_rate": [0.03],
+}
+
 random_search = RandomizedSearchCV(
     pipe,
-    param_distributions=rf_param_dist_safe,
+    param_distributions=param_grid,
     n_iter=40,
     scoring="neg_root_mean_squared_error",
     cv=5,
@@ -254,78 +406,64 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-best_param = random_search.best_params_
+best_param_random = random_search.best_params_
 
-scores = cross_val_score(
-    best_model,
-    X,
-    y,
+# ? Avec param_dist
+# ! R² : 0.989 (train) et  0.603  (test)
+# ! RMSE : 7.653e+06
+# ! MAE : 3.839e+06
+
+# ? Avec rf_param_dist_safe
+# ! R² : 1.000 (train) et  0.438  (test)
+# ! RMSE : 9.109e+06
+# ! MAE : 4.236e+06
+
+# ? Avec param_grid
+# ! R² : 0.917 (train) et  0.616  (test)
+# ! RMSE : 7.527e+06
+# ! MAE : 3.639e+06
+
+# *************************************************
+# *          Parte 5 :: Consensus version         *
+# *************************************************
+
+# TODO : faire un grid avec param grid final
+
+param_grid_final = {
+    "model__learning_rate": [0.03],
+    "model__max_depth": [3],
+    "model__min_child_weight": [3],
+    "model__n_estimators": [800, 900, 1000],
+    "model__reg_lambda": [5, 10],
+    "model__subsample": [0.8, 1.0],
+    "model__colsample_bytree": [0.8, 1.0],
+}
+
+gs = GridSearchCV(
+    estimator=pipe,
+    param_grid=param_grid_final,
     cv=5,
-    scoring="r2"
+    scoring="neg_root_mean_squared_error",
+    n_jobs=-1,
+    refit=True,
 )
 
-scores.mean(), scores.std()
+gs.fit(X_train, y_train)
 
-from sklearn.model_selection import RepeatedKFold, cross_val_score
-
-cv = RepeatedKFold(
-    n_splits=5,
-    n_repeats=10,
-    random_state=42
-)
-
-scores = cross_val_score(
-    best_model,
-    X,
-    y,
-    cv=cv,
-    scoring="r2",
-    n_jobs=-1
-)
-
-scores.mean(), scores.std()
-
-#*********************************************
-#* Créer la nouvelle cible : énergie par m²  *
-#*********************************************
-
-y_intensity = y / (X["PropertyGFATotal"] + 1e-6)
-
-X_intensity = X.drop(columns=["PropertyGFATotal"])
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X_intensity,
-    y_intensity,
-    test_size=0.2,
-    random_state=42
-)
-
-best_model = gs.best_estimator_
-
-best_model.fit(X_train, y_train)
+best_model = gs.best_estimator_  # pipeline complet entraîné sur tout X_train
 
 y_pred = best_model.predict(X_test)
 
-y_pred_total = y_pred * X_test["PropertyGFATotal"]
-y_true_total = y_test * X_test["PropertyGFATotal"]
-
-r2 = r2_score(y_true_total, y_pred_total)
-rmse = np.sqrt(mean_squared_error(y_true_total, y_pred_total))
-
-print("R² :", r2)
-print("RMSE :", rmse)
-
-from sklearn.model_selection import RepeatedKFold, cross_val_score
-
-cv = RepeatedKFold(n_splits=5, n_repeats=10, random_state=42)
-
-scores = cross_val_score(
-    best_model,
-    X_intensity,
-    y_intensity,
-    cv=cv,
-    scoring="r2",
-    n_jobs=-1
+print(
+    f"R² : {best_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {best_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
 )
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-scores.mean(), scores.std()
+best_param = gs.best_params_
+
+xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
+
+# ! R² : 0.897 (train) et  0.634  (test)
+# ! RMSE : 7.346e+06
+# ! MAE : 3.516e+06

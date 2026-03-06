@@ -296,9 +296,9 @@ print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 # ! Résultats :
-# ! R² : 0.891 (train) et  0.676  (test)
-# ! RMSE : 6.908e+06
-# ! MAE : 3.313e+06
+# ! R² : 0.958 (train) et  0.249  (test)
+# ! RMSE : 205.0
+# ! MAE : 102.8
 
 best_param = gs.best_params_
 
@@ -312,7 +312,7 @@ cat_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 # 1. Données RF
 # =========================
 X_rf = df[col_sel].copy()
-y_rf = df["SiteEnergyUse(kBtu)"].copy()
+y_rf = df["TotalGHGEmissions"].copy()
 
 # 3) Scallling
 
@@ -362,7 +362,7 @@ rf_pipe = Pipeline(
 # 3. Données CatBoost
 # =========================
 X_cat = df[col_sel].copy()
-y_cat = df["SiteEnergyUse(kBtu)"].copy()
+y_cat = df["TotalGHGEmissions"].copy()
 
 X_cat[numeric_features] = X_cat[numeric_features].fillna(
     X_cat[numeric_features].median()
@@ -374,7 +374,13 @@ for col in categorical_features:
 cat_features_idx = [X_cat.columns.get_loc(col) for col in categorical_features]
 
 cat_model = CatBoostRegressor(
-    random_state=seed, loss_function="RMSE", eval_metric="RMSE", verbose=0, **cat_params
+    iterations=5000,
+    learning_rate=0.03,
+    depth=6,
+    loss_function="RMSE",
+    eval_metric="RMSE",
+    random_state=seed,
+    verbose=0,
 )
 
 # ===================================
@@ -441,3 +447,15 @@ for model_name in ["RandomForest", "CatBoost"]:
 
 results_df = pd.DataFrame(results).sort_values("r2_mean", ascending=False)
 results_df
+
+# ? Résultats : CatBoost
+# ! R² CV mean : 0.0.35 (test)
+# ! R² train CV std : 0.24 (test)
+# ! RMSE mean : 277.27
+# ! MAE mean : 110.04
+
+# ? Résultats : Random forest
+# ! R² CV mean : 0.0.38 (test)
+# ! R² train CV std : 0.19 (test)
+# ! RMSE mean : 279.37
+# ! MAE mean : 110.54
