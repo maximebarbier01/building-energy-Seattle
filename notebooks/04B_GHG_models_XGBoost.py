@@ -37,7 +37,7 @@ from dython.nominal import (
     cramers_v,  # V de Cramér
     theils_u,  # Alternative asymétrique
 )
-from scipy.stats import kruskal
+from scipy.stats import kruskal, randint, uniform
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -51,7 +51,12 @@ from sklearn.metrics import (
     mean_squared_log_error,
     r2_score,
 )
-from sklearn.model_selection import GridSearchCV, cross_validate, train_test_split
+from sklearn.model_selection import (
+    GridSearchCV,
+    cross_validate,
+    train_test_split,
+    RandomizedSearchCV,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
     LabelEncoder,
@@ -63,6 +68,13 @@ from sklearn.preprocessing import (
 from sklearn.svm import SVR
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from xgboost import XGBRegressor
+
+# Pour mise en forme des résultats
+import colorama
+
+import sys
+
+print(sys.executable)
 
 # =========================
 # Local imports (src/)
@@ -108,19 +120,16 @@ numeric_features = [
     "building_age",
     "buildings_gfa_ratio",
     "parking_gfa_ratio",
-#    "gas_prop", suppression car leakage (calculé sur target)
-#    "elec_prop",
-#    "steam_prop",
+    #    "gas_prop", suppression car leakage (calculé sur target)
+    #    "elec_prop",
+    #    "steam_prop",
 ]
 
-categorical_features = [
-    #    'BuildingType',
-    "PrimaryPropertyGroup"
-]
+categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
 
 col_sel = numeric_features + categorical_features
 X = df[col_sel]
-y = df["SiteEnergyUse(kBtu)"]  # df["log_SiteEnergyUse"]
+y = df["TotalGHGEmissions"]  # df["log_SiteEnergyUse"]
 
 X = X.copy()
 X.columns = X.columns.astype(str)
@@ -146,7 +155,7 @@ numeric_pipeline = Pipeline(
 categorical_pipeline = Pipeline(
     steps=[
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=True)),
     ]
 )
 
@@ -158,40 +167,89 @@ preprocessor = ColumnTransformer(
     remainder="drop",
 )
 
-
-# 3) split train/val (pour early stopping)
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train, y_train, test_size=0.2, random_state=42
-)
-
-X_tr_t = preprocessor.fit_transform(X_tr)
-X_val_t = preprocessor.transform(X_val)
-X_test_t = preprocessor.transform(X_test)
-
 # 4) Modelling
 
-xgb = XGBRegressor(
-    random_state=42,
-    n_estimators=5000,  # grand nombre
-    learning_rate=0.03,
-    max_depth=6,
-    subsample=1.0,
-    colsample_bytree=1.0,
-    reg_lambda=1,
-    tree_method="hist",
-    n_jobs=-1,
-    objective="reg:squarederror",
+# Entraînement simple
+modele = XGBRegressor(random_state=42, n_jobs=-1)  # Paramètres par défaut
+
+pipe = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
 )
 
-# Early stopping via eval_set
-xgb.fit(X_tr_t, y_tr, eval_set=[(X_val_t, y_val)], verbose=False)
+# Grid Search CV
 
-# selon versions, best_iteration peut exister
-best_iter = getattr(xgb, "best_iteration", None)
-print(best_iter)  # print None
+param_grid = {
+    "model__n_estimators": [400, 800],
+    "model__max_depth": [4, 6],
+    "model__learning_rate": [0.03, 0.07],
+    "model__subsample": [0.8, 1.0],
+    "model__colsample_bytree": [0.8, 1.0],
+}
 
-y_pred = xgb.predict(X_test_t)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-r2 = r2_score(y_test, y_pred)
+gs = GridSearchCV(
+    estimator=pipe,
+    param_grid=param_grid,
+    cv=5,
+    scoring="neg_root_mean_squared_error",
+    n_jobs=-1,
+    refit=True,
+)
 
-rmse, r2
+gs.fit(X_train, y_train)
+
+best_model = gs.best_estimator_  # pipeline complet entraîné sur tout X_train
+
+y_pred = best_model.predict(X_test)
+
+print(
+    f"R² : {best_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {best_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
+
+# RandomizedSearchCV
+
+param_dist = {
+    "model__max_depth": randint(3, 10),
+    "model__learning_rate": uniform(0.01, 0.2),
+    "model__subsample": uniform(0.6, 0.4),
+    "model__colsample_bytree": uniform(0.6, 0.4),
+    "model__min_child_weight": randint(1, 10),
+    "model__reg_lambda": uniform(0, 5),
+}
+
+rf_param_dist_safe = {
+    "model__max_depth": [10, 15, 20],
+    "model__min_samples_split": [5, 10, 20],
+    "model__min_samples_leaf": [3, 5, 10],
+    "model__max_features": [0.3, 0.4, 0.5],
+    "model__n_estimators": [300, 500, 700],
+}
+
+random_search = RandomizedSearchCV(
+    pipe,
+    param_distributions=rf_param_dist_safe,
+    n_iter=40,
+    scoring="neg_root_mean_squared_error",
+    cv=5,
+    random_state=37,
+    n_jobs=-1,
+)
+
+random_search.fit(X_train, y_train)
+
+
+best_model = random_search.best_estimator_  # pipeline complet entraîné sur tout X_train
+
+y_pred = best_model.predict(X_test)
+
+print(
+    f"R² : {best_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {best_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
+
+best_param = random_search.best_params_
