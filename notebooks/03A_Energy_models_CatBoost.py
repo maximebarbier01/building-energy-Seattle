@@ -114,14 +114,18 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 
 # 1) Preprocessing
-numeric_features = [
+standard_features = [
     "Latitude",
     "Longitude",
+    "building_age",
+    "EnergyProfileScore",
+]
+
+robust_features = [
     "NumberofBuildings",
     "NumberofFloors",
     "PropertyGFATotal",
     "nb_property_uses",
-    "building_age",
     "buildings_gfa_ratio",
     "parking_gfa_ratio",
 ]
@@ -129,16 +133,20 @@ numeric_features = [
 categorical_features = [
     "BuildingType",
     "PrimaryPropertyGroup",
+    "EnergyProfileGroup",
+    #    "Neighborhood",
 ]
 
-col_sel = numeric_features + categorical_features
+col_sel = standard_features + robust_features + categorical_features
 
 X = df[col_sel].copy()
-y = df["SiteEnergyUse(kBtu)"].copy()
+y = df["SiteEnergyUse(kBtu)"]
+y_log = y.apply(np.log1p)
 
 X = X.copy()
 X.columns = X.columns.astype(str)
-numeric_features = [c for c in map(str, numeric_features) if c in X.columns]
+standard_features = [c for c in map(str, standard_features) if c in X.columns]
+robust_features = [c for c in map(str, robust_features) if c in X.columns]
 categorical_features = [c for c in map(str, categorical_features) if c in X.columns]
 X.info()
 
@@ -169,12 +177,12 @@ y_pred_test = cat_model.predict(X_test)
 print(
     f"R² : {cat_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {cat_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
 )
-print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
+print(f"RMSE : {mean_squared_error(y_test, y_pred_test)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred_test):.4}")
 
 # ! R² : 0.949 (train) et  0.672  (test)
-# ! RMSE : 7.129e+06
-# ! MAE : 3.341e+06
+# ! RMSE : 6.955e+06
+# ! MAE : 3.353e+06
 
 # *************************************************
 # *      Parte 2 :: modele avec early stopping    *
@@ -216,53 +224,12 @@ print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 # ! Résultats :
-# ! R² : 0.866 (train) et  0.640  (test)
+# ! R² : 0.864 (train) et  0.659  (test)
 # ! RMSE : 7.286e+06
 # ! MAE : 3.512e+06
 
 # *************************************************
-# *           Parte 3 :: Validation croisée       *
-# *************************************************
-
-cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
-
-scores_te = []
-scores_tr = []
-
-for train_idx, test_idx in cv.split(X):
-    X_tr = X.iloc[train_idx]
-    X_te = X.iloc[test_idx]
-    y_tr = y.iloc[train_idx]
-    y_te = y.iloc[test_idx]
-
-    model = CatBoostRegressor(
-        iterations=2000,
-        learning_rate=0.03,
-        depth=6,
-        loss_function="RMSE",
-        random_state=42,
-        verbose=0,
-    )
-
-    model.fit(X_tr, y_tr, cat_features=cat_features_idx)
-
-    y_pred_te = model.predict(X_te)
-    scores_te.append(r2_score(y_te, y_pred_te))
-
-    y_pred_tr = model.predict(X_tr)
-    scores_tr.append(r2_score(y_tr, y_pred_tr))
-
-print("R² train CV mean:", np.mean(scores_tr).round(2))
-print("R² test CV mean:", np.mean(scores_te).round(2))
-print("R² train CV std :", np.std(scores_tr).round(2))
-print("R² test CV std :", np.std(scores_te).round(2))
-
-# ! Résultats :
-# ! R² CV mean : 0.97 (train) et 0.61 (test)
-# ! R² train CV std : 0.01 (train) et 0.07 (test)
-
-# *************************************************
-# *             Parte 4 :: GridSearch CV          *
+# *             Parte 3 :: GridSearch CV          *
 # *************************************************
 
 
@@ -305,6 +272,56 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 best_param = gs.best_params_
 
 cat_params = {k.replace("model__", ""): v for k, v in best_param.items()}
+
+
+# *************************************************
+# *           Parte 4 :: Validation croisée       *
+# *************************************************
+
+cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
+
+scores_te = []
+scores_tr = []
+rmse_scores = []
+mae_scores = []
+
+for train_idx, test_idx in cv.split(X):
+    X_tr = X.iloc[train_idx]
+    X_te = X.iloc[test_idx]
+    y_tr = y.iloc[train_idx]
+    y_te = y.iloc[test_idx]
+
+    model = CatBoostRegressor(
+        iterations=2000,
+        learning_rate=0.03,
+        depth=6,
+        loss_function="RMSE",
+        random_state=42,
+        verbose=0,
+    )
+
+    model.fit(X_tr, y_tr, cat_features=cat_features_idx)
+
+    y_pred_te = model.predict(X_te)
+    scores_te.append(r2_score(y_te, y_pred_te))
+
+    y_pred_tr = model.predict(X_tr)
+    scores_tr.append(r2_score(y_tr, y_pred_tr))
+    rmse_scores.append(np.sqrt(mean_squared_error(y_te, y_pred_te)))
+    mae_scores.append(mean_absolute_error(y_te, y_pred_te))
+
+print("R² train CV mean:", np.mean(scores_tr).round(3))
+print("R² test CV mean:", np.mean(scores_te).round(3))
+print("R² train CV std :", np.std(scores_tr).round(3))
+print("R² test CV std :", np.std(scores_te).round(3))
+print("RMSE CV mean:", np.mean(rmse_scores).round(0))
+print("RMSE CV std :", np.std(rmse_scores).round(0))
+print("MAE CV mean :", np.mean(mae_scores).round(0))
+print("MAE CV std  :", np.std(mae_scores).round(0))
+
+# ! Résultats :
+# ! R² CV mean : 0.97 (train) et 0.66 (test)
+# ! R² train CV std : 0.01 (train) et 0.06 (test)
 
 # *************************************************
 # *     Parte 4 :: RandomForest vs CatBoost       *

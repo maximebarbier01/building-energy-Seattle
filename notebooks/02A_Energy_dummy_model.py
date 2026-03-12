@@ -113,14 +113,18 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 
 # 1) Preprocessing
-numeric_features = [
+standard_features = [
     "Latitude",
     "Longitude",
+    "building_age",
+    #    "EnergyProfileScore",
+]
+
+robust_features = [
     "NumberofBuildings",
     "NumberofFloors",
     "PropertyGFATotal",
     "nb_property_uses",
-    "building_age",
     "buildings_gfa_ratio",
     "parking_gfa_ratio",
 ]
@@ -128,16 +132,19 @@ numeric_features = [
 categorical_features = [
     "BuildingType",
     "PrimaryPropertyGroup",
+    "EnergyProfileGroup",
+    "Neighborhood",
 ]
 
-col_sel = numeric_features + categorical_features
+col_sel = standard_features + robust_features + categorical_features
 
 X = df[col_sel].copy()
 y = df["SiteEnergyUse(kBtu)"].copy()
 
 X = X.copy()
 X.columns = X.columns.astype(str)
-numeric_features = [c for c in map(str, numeric_features) if c in X.columns]
+standard_features = [c for c in map(str, standard_features) if c in X.columns]
+robust_features = [c for c in map(str, robust_features) if c in X.columns]
 categorical_features = [c for c in map(str, categorical_features) if c in X.columns]
 X.info()
 
@@ -154,11 +161,18 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 # 3) Scallling
 
-numeric_pipeline = Pipeline(
+standard_pipeline = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ]
+)
+
+robust_pipeline = Pipeline(
     steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("outliers", ot.OutlierLogCapper(cap_factor=3.0, log_skew_threshold=1.0)),
-        ("scaler", StandardScaler()),
+        ("scaler", RobustScaler()),
     ]
 )
 
@@ -171,7 +185,8 @@ categorical_pipeline = Pipeline(
 
 preprocessor = ColumnTransformer(
     transformers=[
-        ("num", numeric_pipeline, numeric_features),
+        ("num_std", standard_pipeline, standard_features),
+        ("num_rob", robust_pipeline, robust_features),
         ("cat", categorical_pipeline, categorical_features),
     ],
     remainder="drop",

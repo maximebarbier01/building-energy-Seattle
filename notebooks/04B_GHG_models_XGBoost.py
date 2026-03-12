@@ -132,7 +132,8 @@ categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
 
 col_sel = numeric_features + categorical_features
 X = df[col_sel]
-y = df["SiteEnergyUse(kBtu)"]  # df["log_SiteEnergyUse"]
+y = df["TotalGHGEmissions"].copy()
+# df["log_SiteEnergyUse"]
 
 X = X.copy()
 X.columns = X.columns.astype(str)
@@ -219,10 +220,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.958 (train) et  0.596  (test)
-# ! RMSE : 7.722e+06
-# ! MAE : 3.612e+06
-
+# ! R² : 0.949 (train) et  -0.089  (test)
+# ! RMSE : 247.0
+# ! MAE : 108.6
 # **************************************************
 # *         Parte 2 :: modele anti-overfitting     *
 # **************************************************
@@ -260,9 +260,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.845 (train) et  0.560  (test)
-# ! RMSE : 8.054e+06
-# ! MAE : 3.897e+06
+# ! R² : 0.799 (train) et  -0.092  (test)
+# ! RMSE : 247.2
+# ! MAE : 117.2
 
 # *************************************************
 # *           Parte 3 :: Validation croisée       *
@@ -303,8 +303,8 @@ print("R² train CV std :", np.std(scores_tr).round(2))
 print("R² test CV std :", np.std(scores_te).round(2))
 
 # ! Résultats :
-# ! R² CV mean : 0.83 (train) et 0.57 (test)
-# ! R² train CV std : 0.01 (train) et 0.08 (test)
+# ! R² CV mean : 0.77 (train) et 0.28 (test)
+# ! R² train CV std : 0.02 (train) et 0.3 (test)
 
 # *************************************************
 # *             Parte 4 :: GridSearch CV          *
@@ -347,9 +347,9 @@ best_param = gs.best_params_
 
 xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 
-# ! R² : 0.897 (train) et  0.634  (test)
-# ! RMSE : 7.346e+06
-# ! MAE : 3.516e+06
+# ! R² : 0.917 (train) et  -0.067  (test)
+# ! RMSE : 244.4
+# ! MAE : 110.5
 
 # *************************************************
 # *         Parte 5 :: RandomizedSearchCV         *
@@ -365,27 +365,9 @@ param_dist = {
     "model__reg_lambda": uniform(0, 5),
 }
 
-rf_param_dist_safe = {
-    "model__max_depth": [10, 15, 20],
-    "model__min_samples_split": [5, 10, 20],
-    "model__min_samples_leaf": [3, 5, 10],
-    "model__max_features": [0.3, 0.4, 0.5],
-    "model__n_estimators": [300, 500, 700],
-}
-
-param_grid = {
-    "model__max_depth": [3, 4, 5],
-    "model__min_child_weight": [3, 5, 10],
-    "model__subsample": [0.7, 0.8, 1.0],
-    "model__colsample_bytree": [0.7, 0.8, 1.0],
-    "model__reg_lambda": [1, 5, 10],
-    "model__n_estimators": [800, 1000, 1200],
-    "model__learning_rate": [0.03],
-}
-
 random_search = RandomizedSearchCV(
     pipe,
-    param_distributions=param_grid,
+    param_distributions=param_grid_v2,
     n_iter=40,
     scoring="neg_root_mean_squared_error",
     cv=5,
@@ -409,61 +391,6 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 best_param_random = random_search.best_params_
 
 # ? Avec param_dist
-# ! R² : 0.989 (train) et  0.603  (test)
-# ! RMSE : 7.653e+06
-# ! MAE : 3.839e+06
-
-# ? Avec rf_param_dist_safe
-# ! R² : 1.000 (train) et  0.438  (test)
-# ! RMSE : 9.109e+06
-# ! MAE : 4.236e+06
-
-# ? Avec param_grid
-# ! R² : 0.917 (train) et  0.616  (test)
-# ! RMSE : 7.527e+06
-# ! MAE : 3.639e+06
-
-# *************************************************
-# *          Parte 5 :: Consensus version         *
-# *************************************************
-
-# TODO : faire un grid avec param grid final
-
-param_grid_final = {
-    "model__learning_rate": [0.03],
-    "model__max_depth": [3],
-    "model__min_child_weight": [3],
-    "model__n_estimators": [800, 900, 1000],
-    "model__reg_lambda": [5, 10],
-    "model__subsample": [0.8, 1.0],
-    "model__colsample_bytree": [0.8, 1.0],
-}
-
-gs = GridSearchCV(
-    estimator=pipe,
-    param_grid=param_grid_final,
-    cv=5,
-    scoring="neg_root_mean_squared_error",
-    n_jobs=-1,
-    refit=True,
-)
-
-gs.fit(X_train, y_train)
-
-best_model = gs.best_estimator_  # pipeline complet entraîné sur tout X_train
-
-y_pred = best_model.predict(X_test)
-
-print(
-    f"R² : {best_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {best_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
-)
-print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
-
-best_param = gs.best_params_
-
-xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
-
-# ! R² : 0.897 (train) et  0.634  (test)
-# ! RMSE : 7.346e+06
-# ! MAE : 3.516e+06
+# ! R² : 0.859 (train) et  0.015  (test)
+# ! RMSE : 234.9
+# ! MAE : 108.3

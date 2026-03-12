@@ -134,7 +134,7 @@ categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
 
 col_sel = numeric_features + categorical_features
 X = df[col_sel]
-y = df["SiteEnergyUse(kBtu)"]  # df["log_SiteEnergyUse"]
+y = df["TotalGHGEmissions"]
 
 X = X.copy()
 X.columns = X.columns.astype(str)
@@ -301,13 +301,14 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.881 (train) et  0.545  (test)
-# ! RMSE :
-# ! MAE :
-
 best_param = gs.best_params_
 
-cat_params = {k.replace("model__", ""): v for k, v in best_param.items()}
+xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
+
+# ! R² : 0.787 (train) et  0.645  (test)
+# ! RMSE : 7.24e+06
+# ! MAE : 3.638e+06
+
 
 # *************************************************
 # *         Parte 5 :: RandomizedSearchCV         *

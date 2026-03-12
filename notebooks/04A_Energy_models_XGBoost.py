@@ -44,7 +44,7 @@ from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import ElasticNet, LinearRegression
+from sklearn.linear_model import ElasticNet, LinearRegression, Ridge
 from sklearn.metrics import (
     mean_absolute_error,
     mean_absolute_percentage_error,
@@ -113,32 +113,43 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 
 # 1) Preprocessing
-numeric_features = [
+standard_features = [
     "Latitude",
     "Longitude",
-    "NumberofBuildings",
-    "NumberofFloors",
-    "PropertyGFATotal",  # Je le garde et j'utiliserai le log_gfa ensuite
-    "nb_property_uses",
     "building_age",
-    "buildings_gfa_ratio",
-    "parking_gfa_ratio",
-    #    "gas_prop", suppression car leakage (calculé sur target)
-    #    "elec_prop",
-    #    "steam_prop",
+    #    "EnergyProfileScore",
 ]
 
-categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
+robust_features = [
+    "NumberofBuildings",
+    "NumberofFloors",
+    "PropertyGFATotal",
+    "nb_property_uses",
+    "buildings_gfa_ratio",
+    "parking_gfa_ratio",
+]
 
-col_sel = numeric_features + categorical_features
-X = df[col_sel]
-y = df["SiteEnergyUse(kBtu)"]  # df["log_SiteEnergyUse"]
+categorical_features = [
+    "BuildingType",
+    "PrimaryPropertyGroup",
+    "EnergyProfileGroup",
+    #    "Neighborhood",
+]
+
+col_sel = standard_features + robust_features + categorical_features
+
+X = df[col_sel].copy()
+y = df["SiteEnergyUse(kBtu)"]
+y_log = y.apply(np.log1p)
 
 X = X.copy()
 X.columns = X.columns.astype(str)
-numeric_features = [c for c in map(str, numeric_features) if c in X.columns]
+standard_features = [c for c in map(str, standard_features) if c in X.columns]
+robust_features = [c for c in map(str, robust_features) if c in X.columns]
 categorical_features = [c for c in map(str, categorical_features) if c in X.columns]
 X.info()
+
+seed = 42
 
 # 2) split train/test
 X_train, X_test, y_train, y_test = train_test_split(
@@ -147,11 +158,18 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 # 3) Scalling
 
-numeric_pipeline = Pipeline(
+standard_pipeline = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ]
+)
+
+robust_pipeline = Pipeline(
     steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("outliers", ot.OutlierLogCapper(cap_factor=3.0, log_skew_threshold=1.0)),
-        ("scaler", StandardScaler()),
+        ("scaler", RobustScaler()),
     ]
 )
 
@@ -164,29 +182,18 @@ categorical_pipeline = Pipeline(
 
 preprocessor = ColumnTransformer(
     transformers=[
-        ("num", numeric_pipeline, numeric_features),
+        ("num_std", standard_pipeline, standard_features),
+        ("num_rob", robust_pipeline, robust_features),
         ("cat", categorical_pipeline, categorical_features),
     ],
     remainder="drop",
-)
-
-# 4) Modelling
-
-# Entraînement simple
-modele = XGBRegressor(random_state=42, n_jobs=-1)  # Paramètres par défaut
-
-pipe = Pipeline(
-    steps=[
-        ("prep", preprocessor),
-        ("model", modele),
-    ]
 )
 
 # *****************************************
 # *         Parte 1 :: modele de base     *
 # *****************************************
 
-modele = XGBRegressor(
+regressor = XGBRegressor(
     objective="reg:squarederror",
     n_estimators=1000,
     learning_rate=0.03,
@@ -202,6 +209,10 @@ modele = XGBRegressor(
     n_jobs=-1,
 )
 
+modele = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
 xgb = Pipeline(
     steps=[
         ("prep", preprocessor),
@@ -219,15 +230,15 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.958 (train) et  0.596  (test)
-# ! RMSE : 7.722e+06
-# ! MAE : 3.612e+06
+# ! R² : 0.898 (train) et  0.607  (test)
+# ! RMSE : 7.618e+06
+# ! MAE : 3.406e+06
 
 # **************************************************
 # *         Parte 2 :: modele anti-overfitting     *
 # **************************************************
 
-modele = XGBRegressor(
+regressor = XGBRegressor(
     objective="reg:squarederror",
     n_estimators=800,
     learning_rate=0.03,
@@ -243,6 +254,10 @@ modele = XGBRegressor(
     n_jobs=-1,
 )
 
+modele = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
 xgb = Pipeline(
     steps=[
         ("prep", preprocessor),
@@ -260,70 +275,47 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.845 (train) et  0.560  (test)
-# ! RMSE : 8.054e+06
-# ! MAE : 3.897e+06
+# ! R² : 0.764 (train) et  0.596  (test)
+# ! RMSE : 7.724e+06
+# ! MAE : 3.4e+06
 
 # *************************************************
-# *           Parte 3 :: Validation croisée       *
-# *************************************************
-
-seed = 42
-
-# 2) split train/val
-
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train, y_train, test_size=0.2, random_state=seed
-)
-
-cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
-
-scores_te = []
-scores_tr = []
-
-for train_idx, test_idx in cv.split(X):
-    X_tr = X.iloc[train_idx]
-    X_te = X.iloc[test_idx]
-    y_tr = y.iloc[train_idx]
-    y_te = y.iloc[test_idx]
-
-    model = xgb
-
-    model.fit(X_tr, y_tr)
-
-    y_pred_te = model.predict(X_te)
-    scores_te.append(r2_score(y_te, y_pred_te))
-
-    y_pred_tr = model.predict(X_tr)
-    scores_tr.append(r2_score(y_tr, y_pred_tr))
-
-print("R² train CV mean:", np.mean(scores_tr).round(2))
-print("R² test CV mean:", np.mean(scores_te).round(2))
-print("R² train CV std :", np.std(scores_tr).round(2))
-print("R² test CV std :", np.std(scores_te).round(2))
-
-# ! Résultats :
-# ! R² CV mean : 0.83 (train) et 0.57 (test)
-# ! R² train CV std : 0.01 (train) et 0.08 (test)
-
-# *************************************************
-# *             Parte 4 :: GridSearch CV          *
+# *             Parte 3 :: GridSearch CV          *
 # *************************************************
 
 # Grid Search CV
-
 param_grid = {
-    "model__max_depth": [3, 4, 5],
-    "model__min_child_weight": [3, 5, 10],
-    "model__subsample": [0.7, 0.8, 1.0],
-    "model__colsample_bytree": [0.7, 0.8, 1.0],
-    "model__reg_lambda": [1, 5, 10],
-    "model__n_estimators": [800, 1000, 1200],
-    "model__learning_rate": [0.03],
+    "model__regressor__max_depth": [3, 4, 5],
+    "model__regressor__min_child_weight": [3, 5, 10],
+    "model__regressor__subsample": [0.7, 0.8, 1.0],
+    "model__regressor__colsample_bytree": [0.7, 0.8, 1.0],
+    "model__regressor__reg_lambda": [1, 5, 10],
+    "model__regressor__n_estimators": [800, 1000, 1200],
+    "model__regressor__learning_rate": [0.03],
 }
 
+regressor = XGBRegressor(
+    objective="reg:squarederror",
+    reg_alpha=0.0,
+    gamma=0.0,
+    tree_method="hist",
+    random_state=42,
+    n_jobs=-1,
+)
+
+modele = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
+xgb = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
+)
+
 gs = GridSearchCV(
-    estimator=pipe,
+    estimator=xgb,
     param_grid=param_grid,
     cv=5,
     scoring="neg_root_mean_squared_error",
@@ -333,8 +325,7 @@ gs = GridSearchCV(
 
 gs.fit(X_train, y_train)
 
-best_model = gs.best_estimator_  # pipeline complet entraîné sur tout X_train
-
+best_model = gs.best_estimator_
 y_pred = best_model.predict(X_test)
 
 print(
@@ -352,7 +343,7 @@ xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 # ! MAE : 3.516e+06
 
 # *************************************************
-# *         Parte 5 :: RandomizedSearchCV         *
+# *         Parte 4 :: RandomizedSearchCV         *
 # *************************************************
 
 
@@ -383,8 +374,29 @@ param_grid = {
     "model__learning_rate": [0.03],
 }
 
+
+regressor = XGBRegressor(
+    objective="reg:squarederror",
+    reg_alpha=0.0,
+    gamma=0.0,
+    tree_method="hist",
+    random_state=42,
+    n_jobs=-1,
+)
+
+modele = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
+xgb = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
+)
+
 random_search = RandomizedSearchCV(
-    pipe,
+    xgb,
     param_distributions=param_grid,
     n_iter=40,
     scoring="neg_root_mean_squared_error",
@@ -467,3 +479,46 @@ xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 # ! R² : 0.897 (train) et  0.634  (test)
 # ! RMSE : 7.346e+06
 # ! MAE : 3.516e+06
+
+
+# *************************************************
+# *           Parte 3 :: Validation croisée       *
+# *************************************************
+
+seed = 42
+
+# 2) split train/val
+
+X_tr, X_val, y_tr, y_val = train_test_split(
+    X_train, y_train, test_size=0.2, random_state=seed
+)
+
+cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
+
+scores_te = []
+scores_tr = []
+
+for train_idx, test_idx in cv.split(X):
+    X_tr = X.iloc[train_idx]
+    X_te = X.iloc[test_idx]
+    y_tr = y.iloc[train_idx]
+    y_te = y.iloc[test_idx]
+
+    model = xgb
+
+    model.fit(X_tr, y_tr)
+
+    y_pred_te = model.predict(X_te)
+    scores_te.append(r2_score(y_te, y_pred_te))
+
+    y_pred_tr = model.predict(X_tr)
+    scores_tr.append(r2_score(y_tr, y_pred_tr))
+
+print("R² train CV mean:", np.mean(scores_tr).round(2))
+print("R² test CV mean:", np.mean(scores_te).round(2))
+print("R² train CV std :", np.std(scores_tr).round(2))
+print("R² test CV std :", np.std(scores_te).round(2))
+
+# ! Résultats :
+# ! R² CV mean : 0.83 (train) et 0.57 (test)
+# ! R² train CV std : 0.01 (train) et 0.08 (test)
