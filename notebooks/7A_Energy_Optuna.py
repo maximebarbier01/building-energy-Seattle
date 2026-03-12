@@ -116,118 +116,153 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 
 # 1) Preprocessing
-numeric_features = [
-    "Latitude",
-    "Longitude",
-    "NumberofBuildings",
-    "NumberofFloors",
-    "PropertyGFATotal",  # Je le garde et j'utiliserai le log_gfa ensuite
-    "nb_property_uses",
-    "building_age",
-    "buildings_gfa_ratio",
-    "parking_gfa_ratio",
-    #    "gas_prop", suppression car leakage (calculé sur target)
-    #    "elec_prop",
-    #    "steam_prop",
+standard_features = [
+    #    "Latitude",
+    #    "Longitude",
+    #    "building_age",
+    #    "EnergyProfileScore",
+    "dist_downtown"
 ]
 
-categorical_features = ["BuildingType", "PrimaryPropertyGroup"]
+robust_features = [
+    "NumberofBuildings",
+    "NumberofFloors",
+    "PropertyGFATotal",
+    "nb_property_uses",
+    "buildings_gfa_ratio",
+    "parking_gfa_ratio",
+]
 
-col_sel = numeric_features + categorical_features
-X = df[col_sel]
-y = df["SiteEnergyUse(kBtu)"]  # df["log_SiteEnergyUse"]
+categorical_features = [
+    #    "BuildingType",
+    "PrimaryPropertyGroup",
+    #    "PrimaryPropertyType",
+    "EnergyProfileGroup",
+    #    "Neighborhood",
+    "ListOfAllPropertyUseTypes",
+]
+
+col_sel = standard_features + robust_features + categorical_features
+
+X = df[col_sel].copy()
+y = df["SiteEnergyUse(kBtu)"]
 
 X = X.copy()
 X.columns = X.columns.astype(str)
-numeric_features = [c for c in map(str, numeric_features) if c in X.columns]
+standard_features = [c for c in map(str, standard_features) if c in X.columns]
+robust_features = [c for c in map(str, robust_features) if c in X.columns]
 categorical_features = [c for c in map(str, categorical_features) if c in X.columns]
 X.info()
 
+seed = 42
+
+
 # 2) split train/test
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
+    X, y, test_size=0.2, random_state=seed
 )
-
-# 3) Scalling
-
-numeric_pipeline = Pipeline(
-    steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("outliers", ot.OutlierLogCapper(cap_factor=3.0, log_skew_threshold=1.0)),
-        ("scaler", StandardScaler()),
-    ]
-)
-
-categorical_pipeline = Pipeline(
-    steps=[
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=True)),
-    ]
-)
-
-preprocessor = ColumnTransformer(
-    transformers=[
-        ("num", numeric_pipeline, numeric_features),
-        ("cat", categorical_pipeline, categorical_features),
-    ],
-    remainder="drop",
-)
-
-seed = 42
 
 # *****************************************
 # *        Parte 1 :: Optuna Catboost     *
 # *****************************************
 
-cv = RepeatedKFold(n_splits=5, n_repeats=3, random_state=42)
+cv = RepeatedKFold(n_splits=5, n_repeats=3, random_state=seed)
 
-X = df[col_sel].copy()
-y = df["SiteEnergyUse(kBtu)"].copy()
-
-X[numeric_features] = X[numeric_features].fillna(X[numeric_features].median())
-
-for col in categorical_features:
-    X[col] = X[col].astype(str).fillna("missing")
-
-cat_features_idx = [X.columns.get_loc(col) for col in categorical_features]
-
-
-def objective_catboost(trial):
+def objective(trial):
     params = {
-        "depth": trial.suggest_int("depth", 6, 9),
-        "iterations": trial.suggest_int("iterations", 700, 2000),
-        "l2_leaf_reg": trial.suggest_int("l2_leaf_reg", 3, 10),
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.05, log=True),
-        "random_strength": trial.suggest_float("random_strength", 0.0, 2.0),
-        "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 3.0),
         "loss_function": "RMSE",
         "eval_metric": "RMSE",
-        "random_state": 42,
+        "random_state": seed,
         "verbose": 0,
+        "depth": trial.suggest_int("depth", 4, 7),
+        "learning_rate": trial.suggest_float("learning_rate", 0.015, 0.05, log=True),
+        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 2.0, 12.0, log=True),
+        "iterations": trial.suggest_int("iterations", 700, 1800),
+        "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 2.0),
+        "random_strength": trial.suggest_float("random_strength", 0.0, 2.0),
     }
 
-    scores = []
+    rmse_scores = []
 
-    for train_idx, test_idx in cv.split(X):
-        X_train = X.iloc[train_idx]
-        X_test = X.iloc[test_idx]
-        y_train = y.iloc[train_idx]
-        y_test = y.iloc[test_idx]
+    for train_idx, valid_idx in cv.split(X_train):
+        X_tr = X_train.iloc[train_idx].copy()
+        X_val = X_train.iloc[valid_idx].copy()
+        y_tr = y_train.iloc[train_idx].copy()
+        y_val = y_train.iloc[valid_idx].copy()
+
+        # log target
+        y_tr_log = np.log1p(y_tr)
+        y_val_log = np.log1p(y_val)
+
+        # indices des variables catégorielles dans le fold courant
+        cat_features_idx_fold = [
+            X_tr.columns.get_loc(col)
+            for col in categorical_features
+            if col in X_tr.columns
+        ]
 
         model = CatBoostRegressor(**params)
-        model.fit(X_train, y_train, cat_features=cat_features_idx)
 
-        y_pred = model.predict(X_test)
-        scores.append(r2_score(y_test, y_pred))
+        model.fit(
+            X_tr,
+            y_tr_log,
+            cat_features=cat_features_idx_fold,
+            eval_set=(X_val, y_val_log),
+            use_best_model=True,
+            early_stopping_rounds=100,
+        )
 
-    return np.mean(scores)
+        y_pred_log = model.predict(X_val)
+        y_pred = np.expm1(y_pred_log)
 
+        rmse = mean_squared_error(y_val, y_pred) ** 0.5
+        rmse_scores.append(rmse)
 
-study_cat = optuna.create_study(direction="maximize")
-study_cat.optimize(objective_catboost, n_trials=40)
+    return np.mean(rmse_scores)
 
-print("Best score:", study_cat.best_value)
-print("Best params:", study_cat.best_params)
+study = optuna.create_study(direction="minimize", study_name="catboost_rmse")
+study.optimize(objective, n_trials=40, show_progress_bar=True)
+
+print("Best trial:")
+print("  RMSE CV :", study.best_value)
+print("  Params  :", study.best_params)
+
+best_params = study.best_params.copy()
+
+final_model = CatBoostRegressor(
+    loss_function="RMSE",
+    eval_metric="RMSE",
+    random_state=seed,
+    verbose=0,
+    **best_params
+)
+
+cat_features_idx = [
+    X_train.columns.get_loc(col)
+    for col in categorical_features
+    if col in X_train.columns
+]
+
+y_train_log = np.log1p(y_train)
+
+final_model.fit(
+    X_train,
+    y_train_log,
+    cat_features=cat_features_idx
+)
+
+# prédictions
+y_pred_train = np.expm1(final_model.predict(X_train))
+y_pred_test = np.expm1(final_model.predict(X_test))
+
+print(
+    f"R² : {r2_score(y_train, y_pred_train):.3f} (train) et "
+    f"{colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} "
+    f"{r2_score(y_test, y_pred_test):.3f} "
+    f"{colorama.Style.RESET_ALL} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred_test) ** 0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred_test):.4}")
 
 # *****************************************
 # *        Parte 2 :: Optuna Catboost     *
