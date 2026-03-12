@@ -42,9 +42,10 @@ from scipy.stats import kruskal, randint, uniform
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.feature_selection import SelectFromModel
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import ElasticNet, LinearRegression, Ridge
+from sklearn.linear_model import ElasticNet, LinearRegression, Ridge, Lasso
 from sklearn.metrics import (
     mean_absolute_error,
     mean_absolute_percentage_error,
@@ -117,7 +118,8 @@ standard_features = [
     "Latitude",
     "Longitude",
     "building_age",
-    #    "EnergyProfileScore",
+    "EnergyProfileScore",
+    "dist_downtown"
 ]
 
 robust_features = [
@@ -126,14 +128,14 @@ robust_features = [
     "PropertyGFATotal",
     "nb_property_uses",
     "buildings_gfa_ratio",
-    "parking_gfa_ratio",
+    "parking_gfa_ratio"
 ]
 
 categorical_features = [
     "BuildingType",
     "PrimaryPropertyGroup",
     "EnergyProfileGroup",
-    #    "Neighborhood",
+    "Neighborhood"
 ]
 
 col_sel = standard_features + robust_features + categorical_features
@@ -189,6 +191,104 @@ preprocessor = ColumnTransformer(
     remainder="drop",
 )
 
+# *************************************************
+# *      Parte 0 :: Selection des features        *
+# *************************************************
+
+def get_permutation_importance_df(model, X_val, y_val, n_repeats=10, random_state=42, n_jobs=-1):
+    """
+    Calcule la permutation importance sur les features d'entrée brutes.
+    Retourne un DataFrame trié.
+    """
+    result = permutation_importance(
+        estimator=model,
+        X=X_val,
+        y=y_val,
+        n_repeats=n_repeats,
+        random_state=random_state,
+        n_jobs=n_jobs,
+        scoring="r2",
+    )
+
+    importance_df = pd.DataFrame({
+        "feature": X_val.columns,
+        "importance_mean": result.importances_mean,
+        "importance_std": result.importances_std,
+    }).sort_values("importance_mean", ascending=False).reset_index(drop=True)
+
+    return importance_df
+
+
+regressor = XGBRegressor(
+    objective="reg:squarederror",
+    n_estimators=1000,
+    learning_rate=0.03,
+    max_depth=4,
+    min_child_weight=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.0,
+    reg_lambda=5.0,
+    gamma=0.0,
+    tree_method="hist",
+    random_state=42,
+    n_jobs=-1,
+)
+
+modele = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
+xgb = Pipeline(
+    steps=[
+        ("prep", preprocessor),
+        ("model", modele),
+    ]
+)
+
+
+xgb.fit(X_train, y_train)
+
+perm_df = get_permutation_importance_df(
+    model=xgb,
+    X_val=X_test,
+    y_val=y_test,
+    n_repeats=10,
+    random_state=42,
+    n_jobs=-1,
+)
+
+print(perm_df)
+
+selected_features = perm_df.loc[
+    perm_df["importance_mean"] > 0,
+    "feature"
+].tolist()
+
+#selected_features = list(set(selected_features + ["Latitude"]))
+
+# Je reconstruit les groupes
+selected_standard_features = [
+    f for f in standard_features if f in selected_features
+]
+
+selected_robust_features = [
+    f for f in robust_features if f in selected_features
+]
+
+selected_categorical_features = [
+    f for f in categorical_features if f in selected_features
+]
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("num_std", standard_pipeline, selected_standard_features),
+        ("num_rob", robust_pipeline, selected_robust_features),
+        ("cat", categorical_pipeline, selected_categorical_features),
+    ],
+    remainder="drop",
+)
+
 # *****************************************
 # *         Parte 1 :: modele de base     *
 # *****************************************
@@ -219,7 +319,6 @@ xgb = Pipeline(
         ("model", modele),
     ]
 )
-
 xgb.fit(X_train, y_train)
 
 y_pred = xgb.predict(X_test)
@@ -230,9 +329,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.898 (train) et  0.607  (test)
-# ! RMSE : 7.618e+06
-# ! MAE : 3.406e+06
+# ! R² : 0.886 (train) et  0.655  (test)
+# ! RMSE : 7.131e+06
+# ! MAE : 3.287e+06
 
 # **************************************************
 # *         Parte 2 :: modele anti-overfitting     *
@@ -275,9 +374,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.764 (train) et  0.596  (test)
-# ! RMSE : 7.724e+06
-# ! MAE : 3.4e+06
+# ! R² : 0.774 (train) et  0.620  (test)
+# ! RMSE : 7.485e+06
+# ! MAE : 3.331e+06
 
 # *************************************************
 # *             Parte 3 :: GridSearch CV          *
@@ -338,42 +437,22 @@ best_param = gs.best_params_
 
 xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 
-# ! R² : 0.897 (train) et  0.634  (test)
-# ! RMSE : 7.346e+06
-# ! MAE : 3.516e+06
+# ! R² : 0.824 (train) et  0.658  (test)
+# ! RMSE : 7.108e+06
+# ! MAE : 3.191e+06
 
 # *************************************************
 # *         Parte 4 :: RandomizedSearchCV         *
 # *************************************************
 
-
 param_dist = {
-    "model__max_depth": randint(3, 10),
-    "model__learning_rate": uniform(0.01, 0.2),
-    "model__subsample": uniform(0.6, 0.4),
-    "model__colsample_bytree": uniform(0.6, 0.4),
-    "model__min_child_weight": randint(1, 10),
-    "model__reg_lambda": uniform(0, 5),
+    "model__regressor__max_depth": randint(3, 10),
+    "model__regressor__learning_rate": uniform(0.01, 0.2),
+    "model__regressor__subsample": uniform(0.6, 0.4),
+    "model__regressor__colsample_bytree": uniform(0.6, 0.4),
+    "model__regressor__min_child_weight": randint(1, 10),
+    "model__regressor__reg_lambda": uniform(0, 5),
 }
-
-rf_param_dist_safe = {
-    "model__max_depth": [10, 15, 20],
-    "model__min_samples_split": [5, 10, 20],
-    "model__min_samples_leaf": [3, 5, 10],
-    "model__max_features": [0.3, 0.4, 0.5],
-    "model__n_estimators": [300, 500, 700],
-}
-
-param_grid = {
-    "model__max_depth": [3, 4, 5],
-    "model__min_child_weight": [3, 5, 10],
-    "model__subsample": [0.7, 0.8, 1.0],
-    "model__colsample_bytree": [0.7, 0.8, 1.0],
-    "model__reg_lambda": [1, 5, 10],
-    "model__n_estimators": [800, 1000, 1200],
-    "model__learning_rate": [0.03],
-}
-
 
 regressor = XGBRegressor(
     objective="reg:squarederror",
@@ -420,105 +499,45 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 best_param_random = random_search.best_params_
 
-# ? Avec param_dist
-# ! R² : 0.989 (train) et  0.603  (test)
-# ! RMSE : 7.653e+06
-# ! MAE : 3.839e+06
-
-# ? Avec rf_param_dist_safe
-# ! R² : 1.000 (train) et  0.438  (test)
-# ! RMSE : 9.109e+06
-# ! MAE : 4.236e+06
-
-# ? Avec param_grid
-# ! R² : 0.917 (train) et  0.616  (test)
-# ! RMSE : 7.527e+06
-# ! MAE : 3.639e+06
-
-# *************************************************
-# *          Parte 5 :: Consensus version         *
-# *************************************************
-
-# TODO : faire un grid avec param grid final
-
-param_grid_final = {
-    "model__learning_rate": [0.03],
-    "model__max_depth": [3],
-    "model__min_child_weight": [3],
-    "model__n_estimators": [800, 900, 1000],
-    "model__reg_lambda": [5, 10],
-    "model__subsample": [0.8, 1.0],
-    "model__colsample_bytree": [0.8, 1.0],
+xgb_random_params = {
+    k.replace("model__regressor__", ""): v
+    for k, v in best_param_random.items()
 }
 
-gs = GridSearchCV(
-    estimator=pipe,
-    param_grid=param_grid_final,
-    cv=5,
-    scoring="neg_root_mean_squared_error",
-    n_jobs=-1,
-    refit=True,
-)
-
-gs.fit(X_train, y_train)
-
-best_model = gs.best_estimator_  # pipeline complet entraîné sur tout X_train
-
-y_pred = best_model.predict(X_test)
-
-print(
-    f"R² : {best_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {best_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
-)
-print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
-
-best_param = gs.best_params_
-
-xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
-
-# ! R² : 0.897 (train) et  0.634  (test)
-# ! RMSE : 7.346e+06
-# ! MAE : 3.516e+06
+# ? Avec param_dist
+# ! R² : 0.847 (train) et  0.690  (test)
+# ! RMSE : 6.763e+06
+# ! MAE : 3.091e+06
 
 
 # *************************************************
-# *           Parte 3 :: Validation croisée       *
+# *           Parte 6 :: Validation croisée       *
 # *************************************************
-
-seed = 42
-
-# 2) split train/val
-
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train, y_train, test_size=0.2, random_state=seed
-)
 
 cv = RepeatedKFold(n_splits=5, n_repeats=5, random_state=seed)
 
-scores_te = []
-scores_tr = []
+scores = cross_validate(
+    best_model,
+    X_train,
+    y_train,
+    cv=cv,
+    scoring={
+        "r2": "r2",
+        "rmse": "neg_root_mean_squared_error",
+        "mae": "neg_mean_absolute_error",
+    },
+    return_train_score=True,
+    n_jobs=-1,
+)
 
-for train_idx, test_idx in cv.split(X):
-    X_tr = X.iloc[train_idx]
-    X_te = X.iloc[test_idx]
-    y_tr = y.iloc[train_idx]
-    y_te = y.iloc[test_idx]
-
-    model = xgb
-
-    model.fit(X_tr, y_tr)
-
-    y_pred_te = model.predict(X_te)
-    scores_te.append(r2_score(y_te, y_pred_te))
-
-    y_pred_tr = model.predict(X_tr)
-    scores_tr.append(r2_score(y_tr, y_pred_tr))
-
-print("R² train CV mean:", np.mean(scores_tr).round(2))
-print("R² test CV mean:", np.mean(scores_te).round(2))
-print("R² train CV std :", np.std(scores_tr).round(2))
-print("R² test CV std :", np.std(scores_te).round(2))
+print("R² train CV mean :", scores["train_r2"].mean().round(3))
+print("R² test  CV mean :", scores["test_r2"].mean().round(3))
+print("R² test  CV std  :", scores["test_r2"].std().round(3))
+print("RMSE test CV mean:", (-scores["test_rmse"].mean()).round(0))
+print("MAE  test CV mean:", (-scores["test_mae"].mean()).round(0))
 
 # ! Résultats :
-# ! R² CV mean : 0.83 (train) et 0.57 (test)
-# ! R² train CV std : 0.01 (train) et 0.08 (test)
+# ! R² CV mean : 0.866 (train) et 0.633 (test)
+# ! R² train CV std : 0.078 (test)
+# ! RMSE test CV mean: 8198499.0
+# ! MAE  test CV mean: 3273585.0

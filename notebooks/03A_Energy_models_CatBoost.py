@@ -39,13 +39,13 @@ from dython.nominal import (
     theils_u,  # Alternative asymétrique
 )
 from scipy.stats import kruskal, randint, uniform
-from sklearn.base import clone
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.feature_selection import SelectFromModel
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import ElasticNet, LinearRegression
+from sklearn.linear_model import ElasticNet, LinearRegression, Ridge, Lasso
 from sklearn.metrics import (
     mean_absolute_error,
     mean_absolute_percentage_error,
@@ -101,7 +101,9 @@ importlib.reload(of)
 pd.set_option("display.max_columns", None)
 pd.options.display.float_format = "{:,.2f}".format
 
-# Import de la table
+# *****************************************
+# *          IMPORT DES TABLES            *
+# *****************************************
 
 df_backup = pd.read_csv(
     "/home/maxime/projects/building-energy-Seattle/data/processed/data_to_use.csv"
@@ -134,14 +136,13 @@ categorical_features = [
     "BuildingType",
     "PrimaryPropertyGroup",
     "EnergyProfileGroup",
-    #    "Neighborhood",
+    "Neighborhood",
 ]
 
 col_sel = standard_features + robust_features + categorical_features
 
 X = df[col_sel].copy()
 y = df["SiteEnergyUse(kBtu)"]
-y_log = y.apply(np.log1p)
 
 X = X.copy()
 X.columns = X.columns.astype(str)
@@ -152,27 +153,29 @@ X.info()
 
 seed = 42
 
-# *****************************************
-# *         Parte 1 :: modele de base     *
-# *****************************************
 
 # 2) split train/test
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=seed
 )
 
-# 3) Modelling
+# *****************************************
+# *         Parte 1 :: modele de base     *
+# *****************************************
 
-cat_features_idx = [X.columns.get_loc(col) for col in categorical_features]
+cat_features_idx = [X_train.columns.get_loc(col) for col in categorical_features]
 
-cat_model = CatBoostRegressor(
+regressor = CatBoostRegressor(
     random_state=seed, loss_function="RMSE", eval_metric="RMSE", verbose=0
+)
+
+cat_model = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
 )
 
 cat_model.fit(X_train, y_train, cat_features=cat_features_idx)
 
-y_pred_train = cat_model.predict(X_train)
-y_pred_test = cat_model.predict(X_test)
+y_pred = cat_model.predict(X_test)
 
 print(
     f"R² : {cat_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {cat_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
@@ -180,23 +183,21 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred_test)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred_test):.4}")
 
-# ! R² : 0.949 (train) et  0.672  (test)
-# ! RMSE : 6.955e+06
-# ! MAE : 3.353e+06
+# ! R² : 0.853 (train) et  0.685  (test)
+# ! RMSE : 6.783e+06
+# ! MAE : 3.102e+06
 
 # *************************************************
 # *      Parte 2 :: modele avec early stopping    *
 # *************************************************
 
-# 2) split train/val
-
 X_tr, X_val, y_tr, y_val = train_test_split(
     X_train, y_train, test_size=0.2, random_state=seed
 )
 
-# 3) Modelling
+cat_features_idx = [X_tr.columns.get_loc(col) for col in selected_categorical_features]
 
-cat_model = CatBoostRegressor(
+regressor = CatBoostRegressor(
     iterations=5000,
     learning_rate=0.03,
     depth=6,
@@ -206,11 +207,15 @@ cat_model = CatBoostRegressor(
     verbose=0,
 )
 
+cat_model = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
 cat_model.fit(
     X_tr,
     y_tr,
-    eval_set=(X_val, y_val),
     cat_features=cat_features_idx,
+    eval_set=(X_val, y_val),
     use_best_model=True,
     early_stopping_rounds=100,
 )
@@ -234,11 +239,22 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 
 param_grid = {
-    "depth": [4, 6, 8],
-    "learning_rate": [0.02, 0.03, 0.05],
-    "l2_leaf_reg": [3, 5, 10],
-    "iterations": [1000, 2000],
+    "regressor__depth": [4, 6, 8],
+    "regressor__learning_rate": [0.02, 0.03, 0.05],
+    "regressor__l2_leaf_reg": [3, 5, 10],
+    "regressor__iterations": [1000, 2000],
 }
+
+regressor = CatBoostRegressor(
+    random_state=seed,
+    loss_function="RMSE",
+    eval_metric="RMSE",
+    verbose=0,
+)
+
+cat_model = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
 
 gs = GridSearchCV(
     estimator=cat_model,
@@ -250,6 +266,9 @@ gs = GridSearchCV(
 )
 
 gs.fit(X_train, y_train, cat_features=cat_features_idx)
+
+best_model = gs.best_estimator_
+y_pred = best_model.predict(X_test)
 
 print(gs.best_params_)
 print(gs.best_score_)
