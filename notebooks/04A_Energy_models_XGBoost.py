@@ -115,10 +115,10 @@ df.info()
 
 # 1) Preprocessing
 standard_features = [
-    "Latitude",
-    "Longitude",
-    "building_age",
-    "EnergyProfileScore",
+    #    "Latitude",
+    #    "Longitude",
+    #    "building_age",
+    #    "EnergyProfileScore",
     "dist_downtown"
 ]
 
@@ -128,14 +128,16 @@ robust_features = [
     "PropertyGFATotal",
     "nb_property_uses",
     "buildings_gfa_ratio",
-    "parking_gfa_ratio"
+    "parking_gfa_ratio",
 ]
 
 categorical_features = [
-    "BuildingType",
+    #    "BuildingType",
     "PrimaryPropertyGroup",
+    #    "PrimaryPropertyType",
     "EnergyProfileGroup",
-    "Neighborhood"
+    #    "Neighborhood",
+    "ListOfAllPropertyUseTypes",
 ]
 
 col_sel = standard_features + robust_features + categorical_features
@@ -195,7 +197,10 @@ preprocessor = ColumnTransformer(
 # *      Parte 0 :: Selection des features        *
 # *************************************************
 
-def get_permutation_importance_df(model, X_val, y_val, n_repeats=10, random_state=42, n_jobs=-1):
+
+def get_permutation_importance_df(
+    model, X_val, y_val, n_repeats=10, random_state=42, n_jobs=-1
+):
     """
     Calcule la permutation importance sur les features d'entrée brutes.
     Retourne un DataFrame trié.
@@ -210,11 +215,17 @@ def get_permutation_importance_df(model, X_val, y_val, n_repeats=10, random_stat
         scoring="r2",
     )
 
-    importance_df = pd.DataFrame({
-        "feature": X_val.columns,
-        "importance_mean": result.importances_mean,
-        "importance_std": result.importances_std,
-    }).sort_values("importance_mean", ascending=False).reset_index(drop=True)
+    importance_df = (
+        pd.DataFrame(
+            {
+                "feature": X_val.columns,
+                "importance_mean": result.importances_mean,
+                "importance_std": result.importances_std,
+            }
+        )
+        .sort_values("importance_mean", ascending=False)
+        .reset_index(drop=True)
+    )
 
     return importance_df
 
@@ -260,21 +271,14 @@ perm_df = get_permutation_importance_df(
 
 print(perm_df)
 
-selected_features = perm_df.loc[
-    perm_df["importance_mean"] > 0,
-    "feature"
-].tolist()
+selected_features = perm_df.loc[perm_df["importance_mean"] > 0, "feature"].tolist()
 
-#selected_features = list(set(selected_features + ["Latitude"]))
+# selected_features = list(set(selected_features + ["Latitude"]))
 
 # Je reconstruit les groupes
-selected_standard_features = [
-    f for f in standard_features if f in selected_features
-]
+selected_standard_features = [f for f in standard_features if f in selected_features]
 
-selected_robust_features = [
-    f for f in robust_features if f in selected_features
-]
+selected_robust_features = [f for f in robust_features if f in selected_features]
 
 selected_categorical_features = [
     f for f in categorical_features if f in selected_features
@@ -329,9 +333,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.886 (train) et  0.655  (test)
-# ! RMSE : 7.131e+06
-# ! MAE : 3.287e+06
+# ! R² : 0.849 (train) et  0.663  (test)
+# ! RMSE : 7.052e+06
+# ! MAE : 3.128e+06
 
 # **************************************************
 # *         Parte 2 :: modele anti-overfitting     *
@@ -374,7 +378,7 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.774 (train) et  0.620  (test)
+# ! R² : 0.741 (train) et  0.618  (test)
 # ! RMSE : 7.485e+06
 # ! MAE : 3.331e+06
 
@@ -437,9 +441,28 @@ best_param = gs.best_params_
 
 xgb_params = {k.replace("model__", ""): v for k, v in best_param.items()}
 
-# ! R² : 0.824 (train) et  0.658  (test)
-# ! RMSE : 7.108e+06
-# ! MAE : 3.191e+06
+# ! R² : 0.839 (train) et  0.675  (test)
+# ! RMSE : 6.919e+06
+# ! MAE : 3.034e+06
+
+result = permutation_importance(
+    best_model, X_test, y_test, n_repeats=10, random_state=42
+)
+
+importance = pd.Series(result.importances_mean, index=X_test.columns).sort_values(
+    ascending=False
+)
+
+importance.tail(20)
+
+# ? Param
+# {'regressor__colsample_bytree': 0.7,
+#  'regressor__learning_rate': 0.03,
+#  'regressor__max_depth': 4,
+#  'regressor__min_child_weight': 5,
+#  'regressor__n_estimators': 800,
+#  'regressor__reg_lambda': 1,
+#  'regressor__subsample': 0.8}
 
 # *************************************************
 # *         Parte 4 :: RandomizedSearchCV         *
@@ -500,15 +523,13 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 best_param_random = random_search.best_params_
 
 xgb_random_params = {
-    k.replace("model__regressor__", ""): v
-    for k, v in best_param_random.items()
+    k.replace("model__regressor__", ""): v for k, v in best_param_random.items()
 }
 
 # ? Avec param_dist
-# ! R² : 0.847 (train) et  0.690  (test)
-# ! RMSE : 6.763e+06
-# ! MAE : 3.091e+06
-
+# ! R² : 0.857 (train) et  0.677  (test)
+# ! RMSE : 6.898e+06
+# ! MAE : 3.053e+06
 
 # *************************************************
 # *           Parte 6 :: Validation croisée       *
@@ -537,7 +558,7 @@ print("RMSE test CV mean:", (-scores["test_rmse"].mean()).round(0))
 print("MAE  test CV mean:", (-scores["test_mae"].mean()).round(0))
 
 # ! Résultats :
-# ! R² CV mean : 0.866 (train) et 0.633 (test)
-# ! R² train CV std : 0.078 (test)
-# ! RMSE test CV mean: 8198499.0
-# ! MAE  test CV mean: 3273585.0
+# ! R² CV mean : 0.873.866 (train) et 0.65 (test)
+# ! R² train CV std : 0.066 (test)
+# ! RMSE test CV mean: 8000739.0
+# ! MAE  test CV mean: 3244741.0

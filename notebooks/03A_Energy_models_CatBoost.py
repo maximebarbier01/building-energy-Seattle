@@ -116,6 +116,10 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 df.shape
 
+# *****************************************
+# *        SELECTION DES FEATURES         *
+# *****************************************
+
 # 1) Preprocessing
 standard_features = [
     #    "Latitude",
@@ -359,8 +363,8 @@ cat_random_params = {
 
 print("CatBoost params nettoyés :", cat_random_params)
 
-#! R² : 0.874 (train) et  0.702  (test)
-#! RMSE : 6.63e+06
+#! R² : 0.846 (train) et  0.290  (test)
+#! RMSE : 199.4
 #! MAE : 2.97e+06
 
 # ? Params
@@ -370,6 +374,38 @@ print("CatBoost params nettoyés :", cat_random_params)
 # 'l2_leaf_reg': 5,
 # 'learning_rate': np.float64(0.09485682135021828),
 # 'random_strength': np.float64(1.197730932977072)}
+
+# *************************************************
+# *                   BEST_MODELE                 *
+# *************************************************
+
+regressor = CatBoostRegressor(
+    bagging_temperature=float(0.8207658460712595),
+    depth=5,
+    iterations=1040,
+    l2_leaf_reg=5,
+    learning_rate=float(0.09485682135021828),
+    random_strength=float(1.197730932977072),
+    random_state=seed,
+    loss_function="RMSE",
+    eval_metric="RMSE",
+    verbose=0,
+)
+
+best_cat_model = TransformedTargetRegressor(
+    regressor=regressor, func=np.log1p, inverse_func=np.expm1
+)
+
+best_cat_model.fit(X_train, y_train, cat_features=cat_features_idx)
+
+y_pred = best_cat_model.predict(X_test)
+
+print(
+    f"R² : {best_cat_model.score(X_train, y_train):.3f} (train) et "
+    f"{best_cat_model.score(X_test, y_test):.3f} (test)"
+)
+print(f"RMSE : {mean_squared_error(y_test, y_pred) ** 0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 # *************************************************
 # *           Parte 4 :: Validation croisée       *
@@ -422,16 +458,16 @@ for train_idx, test_idx in cv.split(X_train):
     mae_tr.append(mean_absolute_error(y_tr, y_pred_tr))
     mae_te.append(mean_absolute_error(y_te, y_pred_te))
 
-print("R² train CV mean :", np.mean(scores_tr).round(3))
-print("R² test  CV mean :", np.mean(scores_te).round(3))
-print("R² train CV std  :", np.std(scores_tr).round(3))
-print("R² test  CV std  :", np.std(scores_te).round(3))
+    print("R² train CV mean :", np.mean(scores_tr).round(3))
+    print("R² test  CV mean :", np.mean(scores_te).round(3))
+    print("R² train CV std  :", np.std(scores_tr).round(3))
+    print("R² test  CV std  :", np.std(scores_te).round(3))
 
-print("RMSE train CV mean :", np.mean(rmse_tr).round(0))
-print("RMSE test  CV mean :", np.mean(rmse_te).round(0))
+    print("RMSE train CV mean :", np.mean(rmse_tr).round(0))
+    print("RMSE test  CV mean :", np.mean(rmse_te).round(0))
 
-print("MAE train CV mean :", np.mean(mae_tr).round(0))
-print("MAE test  CV mean :", np.mean(mae_te).round(0))
+    print("MAE train CV mean :", np.mean(mae_tr).round(0))
+    print("MAE test  CV mean :", np.mean(mae_te).round(0))
 
 # ? Le modèle CatBoost standard avec transformation logarithmique de la cible présente
 # ? la meilleure capacité de généralisation selon le coefficient de détermination,
