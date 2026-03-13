@@ -114,6 +114,7 @@ df = df_backup.copy()
 df["CouncilDistrictCode"] = df["CouncilDistrictCode"].astype("category")
 df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
+df.shape
 
 # 1) Preprocessing
 standard_features = [
@@ -183,8 +184,9 @@ y_pred = cat_model.predict(X_test)
 print(
     f"R² : {cat_model.score(X_train, y_train):.3f} (train) et {colorama.Style.BRIGHT}{colorama.Back.CYAN}{colorama.Fore.BLACK} {cat_model.score(X_test, y_test):.3f} {colorama.Style.RESET_ALL} (test)"
 )
-print(f"RMSE : {mean_squared_error(y_test, y_pred_test)**0.5:.4}")
-print(f"MAE : {mean_absolute_error(y_test, y_pred_test):.4}")
+
+print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
+print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 # ! R² : 0.830 (train) et  0.717  (test)
 # ! RMSE : 6.783e+06
@@ -253,12 +255,12 @@ regressor = CatBoostRegressor(
     verbose=0,
 )
 
-cat_model = TransformedTargetRegressor(
+cat_model_gs = TransformedTargetRegressor(
     regressor=regressor, func=np.log1p, inverse_func=np.expm1
 )
 
 gs = GridSearchCV(
-    estimator=cat_model,
+    estimator=cat_model_gs,
     param_grid=param_grid,
     scoring="r2",
     cv=5,
@@ -319,14 +321,14 @@ regressor = CatBoostRegressor(
     random_state=seed, loss_function="RMSE", eval_metric="RMSE", verbose=0
 )
 
-cat_model = TransformedTargetRegressor(
+cat_model_rs = TransformedTargetRegressor(
     regressor=regressor, func=np.log1p, inverse_func=np.expm1
 )
 
 # 6) RandomizedSearchCV
 random_search = RandomizedSearchCV(
-    estimator=cat_model,
-    param_distributions=param_dist_v2,
+    estimator=cat_model_rs,
+    param_distributions=param_dist,
     n_iter=40,
     scoring="neg_root_mean_squared_error",
     cv=5,
@@ -360,6 +362,14 @@ print("CatBoost params nettoyés :", cat_random_params)
 #! R² : 0.874 (train) et  0.702  (test)
 #! RMSE : 6.63e+06
 #! MAE : 2.97e+06
+
+# ? Params
+# {'bagging_temperature': np.float64(0.8207658460712595),
+# 'depth': 5,
+# 'iterations': 1040,
+# 'l2_leaf_reg': 5,
+# 'learning_rate': np.float64(0.09485682135021828),
+# 'random_strength': np.float64(1.197730932977072)}
 
 # *************************************************
 # *           Parte 4 :: Validation croisée       *
@@ -422,3 +432,543 @@ print("RMSE test  CV mean :", np.mean(rmse_te).round(0))
 
 print("MAE train CV mean :", np.mean(mae_tr).round(0))
 print("MAE test  CV mean :", np.mean(mae_te).round(0))
+
+# ? Le modèle CatBoost standard avec transformation logarithmique de la cible présente
+# ? la meilleure capacité de généralisation selon le coefficient de détermination,
+# ? avec un R² test de 0.717 contre 0.702 pour la version optimisée par RandomizedSearchCV.
+# ? En revanche, le modèle optimisé obtient des erreurs absolues plus faibles,
+# ? avec un RMSE de 6.63e+06 et un MAE de 2.97e+06, contre respectivement 6.783e+06 et 3.102e+06 pour le modèle standard.
+
+# *************************************************
+# *      Varibales importantes dans le modèle     *
+# *************************************************
+
+# ? Best model
+
+print(type(best_model))
+print(hasattr(best_model, "regressor"))
+print(hasattr(best_model, "regressor_"))
+
+importance_bm = best_model.regressor_.get_feature_importance()
+
+imp_bm_df = pd.DataFrame(
+    {"feature": X_train.columns, "importance": importance_bm}
+).sort_values("importance", ascending=False)
+
+imp_bm_df
+
+plt.figure(figsize=(8, 5))
+
+sns.barplot(data=imp_bm_df, x="importance", y="feature")
+
+plt.title("CatBoost Feature Importance")
+plt.tight_layout()
+plt.show()
+
+# ? Base model (cat_model)
+
+print(type(cat_model))
+print(hasattr(cat_model, "regressor"))
+print(hasattr(cat_model, "regressor_"))
+
+importance_cat = cat_model.regressor_.get_feature_importance()
+
+imp_cat_df = pd.DataFrame(
+    {"feature": X_train.columns, "importance": importance_cat}
+).sort_values("importance", ascending=False)
+
+imp_cat_df
+
+plt.figure(figsize=(8, 5))
+
+sns.barplot(data=imp_cat_df, x="importance", y="feature")
+
+plt.title("CatBoost Feature Importance")
+plt.tight_layout()
+plt.show()
+
+# *************************************************
+# *     Analyse des erreurs absolues du modèle    *
+# *************************************************
+
+errors = pd.DataFrame({"y_true": y_test, "y_pred": y_pred})
+
+errors["abs_error"] = abs(errors["y_true"] - errors["y_pred"])
+
+errors.sort_values("abs_error", ascending=False).head(20)
+
+errors.abs_error.describe()
+
+errors = pd.DataFrame({"y_true": y_test, "y_pred": y_pred})
+
+errors["abs_error"] = abs(errors["y_true"] - errors["y_pred"])
+
+errors.sort_values("abs_error", ascending=False).head(20)
+
+errors.abs_error.describe()
+
+
+def plot_regression_predictions(
+    model,
+    X,
+    y,
+    title="CatBoost Model: Predicted vs Target",
+):
+    y_pred = model.predict(X)
+
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(y, y_pred, alpha=0.5)
+
+    # ligne parfaite
+    min_val = min(y.min(), y_pred.min())
+    max_val = max(y.max(), y_pred.max())
+
+    plt.plot(
+        [min_val, max_val],
+        [min_val, max_val],
+        color="red",
+        linestyle="--",
+    )
+
+    plt.xlabel("Target")
+    plt.ylabel("Predicted")
+    plt.title(title)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_regression_predictions(
+    cat_model, X_test, y_test, title="CatBoost: Predicted vs Target"
+)
+
+plot_regression_predictions(
+    best_model, X_train, y_train, title="CatBoost: Predicted vs Target"
+)
+
+
+def plot_regression_error(
+    model, X, y, xlim=None, title="Distribution of Regression Errors"
+):
+    y_pred = model.predict(X)
+
+    errors = y - y_pred
+
+    plt.figure(figsize=(7, 5))
+
+    sns.histplot(errors, bins=50, kde=True)
+
+    plt.axvline(0, color="red", linestyle="--")
+
+    if xlim is not None:
+        plt.xlim(xlim)
+
+    plt.xlabel("Error (y_true - y_pred)")
+    plt.ylabel("Frequency")
+    plt.title(title)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_regression_error(
+    cat_model, X_test, y_test, xlim=(-1e7, 1e7), title="CatBoost Error Distribution"
+)
+
+
+def plot_absolute_error_distribution(
+    y_true, y_pred, title="Absolute Error Distribution"
+):
+    abs_error = np.abs(y_true - y_pred)
+
+    plt.figure(figsize=(7, 5))
+
+    sns.histplot(abs_error, bins=50, kde=True)
+
+    plt.xlabel("Absolute Error")
+    plt.ylabel("Frequency")
+    plt.title(title)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_absolute_error_distribution(y_test, y_pred, title="CatBoost Absolute Error")
+
+
+def plot_error_vs_target(y_true, y_pred, title="Error vs Target"):
+    errors = y_true - y_pred
+
+    plt.figure(figsize=(6, 5))
+
+    plt.scatter(y_true, errors, alpha=0.5)
+
+    plt.axhline(0, color="red", linestyle="--")
+
+    plt.xlabel("Target")
+    plt.ylabel("Error")
+    plt.title(title)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_error_vs_target(y_test, y_pred)
+
+plt.scatter(np.log1p(y_test), np.log1p(y_pred))
+
+# *************************************************
+# *     Comparaison par PrimaryPropertyGroup      *
+# *************************************************
+
+model = cat_model
+y_pred = model.predict(X_test)
+
+
+def add_binned_feature(df, feature_col, n_bins=4, method="qcut"):
+    """
+    Ajoute une colonne binned pour une variable numérique.
+
+    method:
+    - 'qcut' : quantiles
+    - 'cut'  : intervalles réguliers
+    """
+    df = df.copy()
+
+    new_col = f"{feature_col}_bin"
+
+    if method == "qcut":
+        df[new_col] = pd.qcut(df[feature_col], q=n_bins, duplicates="drop")
+    elif method == "cut":
+        df[new_col] = pd.cut(df[feature_col], bins=n_bins)
+    else:
+        raise ValueError("method doit être 'qcut' ou 'cut'")
+
+    return df
+
+
+X_test_analysis = X_test.copy()
+
+X_test_analysis = add_binned_feature(
+    X_test_analysis, feature_col="PropertyGFATotal", n_bins=4, method="qcut"
+)
+
+print(X_test_analysis["PropertyGFATotal_bin"].value_counts(dropna=False))
+
+gfa_bins = X_test_analysis["PropertyGFATotal_bin"].dropna().unique().tolist()
+gfa_bins = sorted(gfa_bins)
+
+print(gfa_bins)
+
+x_test_y_test_gfa_bins = {}
+
+for gfa_bin in gfa_bins:
+    mask = X_test_analysis["PropertyGFATotal_bin"] == gfa_bin
+
+    X_group = X_test_analysis.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    x_test_y_test_gfa_bins[gfa_bin] = (X_group, y_group)
+
+for gfa_bin in gfa_bins:
+    X_group, y_group = x_test_y_test_gfa_bins[gfa_bin]
+
+    if len(X_group) < 5:
+        continue
+
+    plot_regression_predictions(
+        model,
+        X_group,
+        y_group,
+        title=f"CatBoost: Predicted vs Target - PropertyGFATotal {gfa_bin}",
+    )
+
+for gfa_bin in gfa_bins:
+    X_group, y_group = x_test_y_test_gfa_bins[gfa_bin]
+
+    if len(X_group) < 5:
+        continue
+
+    plot_regression_error(
+        model,
+        X_group,
+        y_group,
+        xlim=(-1e7, 1e7),
+        title=f"CatBoost Error Distribution - PropertyGFATotal {gfa_bin}",
+    )
+
+gfa_results = []
+
+for gfa_bin in gfa_bins:
+    X_group, y_group = x_test_y_test_gfa_bins[gfa_bin]
+
+    if len(X_group) < 5:
+        continue
+
+    y_pred_group = model.predict(X_group)
+
+    gfa_results.append(
+        {
+            "PropertyGFATotal_bin": str(gfa_bin),
+            "n": len(X_group),
+            "y_mean": y_group.mean(),
+            "r2": r2_score(y_group, y_pred_group),
+            "rmse": mean_squared_error(y_group, y_pred_group) ** 0.5,
+            "mae": mean_absolute_error(y_group, y_pred_group),
+            "mape": mean_absolute_percentage_error(y_group, y_pred_group),
+            "rmse_over_mean": (mean_squared_error(y_group, y_pred_group) ** 0.5)
+            / y_group.mean(),
+        }
+    )
+
+gfa_results_df = pd.DataFrame(gfa_results)
+gfa_results_df
+
+
+# ? RMSE
+plt.figure(figsize=(10, 5))
+sns.barplot(data=gfa_results_df, x="rmse", y="PropertyGFATotal_bin")
+plt.title("RMSE by PropertyGFATotal bin")
+plt.xlabel("RMSE")
+plt.ylabel("PropertyGFATotal bin")
+plt.tight_layout()
+plt.show()
+
+# ? MAE
+plt.figure(figsize=(10, 5))
+sns.barplot(data=gfa_results_df, x="mae", y="PropertyGFATotal_bin")
+plt.title("MAE by PropertyGFATotal bin")
+plt.xlabel("MAE")
+plt.ylabel("PropertyGFATotal bin")
+plt.tight_layout()
+plt.show()
+
+# ? R²
+plt.figure(figsize=(10, 5))
+sns.barplot(data=gfa_results_df, x="r2", y="PropertyGFATotal_bin")
+plt.title("R² by PropertyGFATotal bin")
+plt.xlabel("R²")
+plt.ylabel("PropertyGFATotal bin")
+plt.tight_layout()
+plt.show()
+
+# *************************************************
+# *          Fonction pour comparaison            *
+# *************************************************
+
+
+def analyze_model_by_numeric_feature_bins(
+    model,
+    X_test,
+    y_test,
+    selected_features,
+    feature_col,
+    n_bins=4,
+    method="qcut",
+    min_samples=5,
+):
+    X_analysis = X_test.copy()
+    X_analysis = add_binned_feature(
+        X_analysis, feature_col, n_bins=n_bins, method=method
+    )
+
+    bin_col = f"{feature_col}_bin"
+    bins = X_analysis[bin_col].dropna().unique().tolist()
+    bins = sorted(bins)
+
+    results = []
+
+    for b in bins:
+        mask = X_analysis[bin_col] == b
+
+        X_group = X_analysis.loc[mask, selected_features].copy()
+        y_group = y_test.loc[mask].copy()
+
+        if len(X_group) < min_samples:
+            continue
+
+        y_pred_group = model.predict(X_group)
+
+        results.append(
+            {
+                "bin": str(b),
+                "n": len(X_group),
+                "y_mean": y_group.mean(),
+                "r2": r2_score(y_group, y_pred_group),
+                "rmse": mean_squared_error(y_group, y_pred_group) ** 0.5,
+                "mae": mean_absolute_error(y_group, y_pred_group),
+                "mape": mean_absolute_percentage_error(y_group, y_pred_group),
+                "rmse_over_mean": (mean_squared_error(y_group, y_pred_group) ** 0.5)
+                / y_group.mean()
+                / y_group.mean(),
+            }
+        )
+
+    return pd.DataFrame(results)
+
+
+gfa_results_df = analyze_model_by_numeric_feature_bins(
+    model=best_model,
+    X_test=X_test,
+    y_test=y_test,
+    selected_features=col_sel,
+    feature_col="PropertyGFATotal",
+    n_bins=4,
+    method="qcut",
+    min_samples=5,
+)
+
+gfa_results_df
+
+# *************************************************
+# *     Comparaison par PrimaryPropertyGroup      *
+# *************************************************
+
+groups = sorted(X_test["PrimaryPropertyGroup"].dropna().unique())
+
+group_results = []
+
+for group in groups:
+    mask = X_test["PrimaryPropertyGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    y_pred_group = best_model.predict(X_group)
+
+    group_results.append(
+        {
+            "PrimaryPropertyGroup": group,
+            "n": len(X_group),
+            "y_mean": y_group.mean(),
+            "r2": r2_score(y_group, y_pred_group),
+            "rmse": mean_squared_error(y_group, y_pred_group) ** 0.5,
+            "mae": mean_absolute_error(y_group, y_pred_group),
+            "mape": mean_absolute_percentage_error(y_group, y_pred_group),
+            "rmse_over_mean": (mean_squared_error(y_group, y_pred_group) ** 0.5)
+            / y_group.mean(),
+        }
+    )
+
+group_results_df = pd.DataFrame(group_results).sort_values("rmse")
+group_results_df.PrimaryPropertyGroup
+
+for group in groups:
+    mask = X_test["PrimaryPropertyGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    plot_regression_predictions(
+        best_model, X_group, y_group, title=f"Predicted vs Target - {group}"
+    )
+
+
+# ? R²
+plt.figure(figsize=(10, 5))
+sns.barplot(data=group_results_df, x="r2", y="PrimaryPropertyGroup")
+plt.title("R² by PrimaryPropertyGroup bin")
+plt.xlabel("R²")
+plt.ylabel("Primary Profil Group")
+plt.tight_layout()
+plt.show()
+
+# ? RMSE
+plt.figure(figsize=(10, 5))
+sns.barplot(data=group_results_df, x="rmse", y="PrimaryPropertyGroup")
+plt.title("R² by PrimaryPropertyGroup bin")
+plt.xlabel("R²")
+plt.ylabel("Primary Profil Group")
+plt.tight_layout()
+plt.show()
+
+df.PrimaryPropertyGroup.value_counts()
+
+# *************************************************
+# *      Comparaison par EnergyProfileGroup       *
+# *************************************************
+
+groups = sorted(X_test["EnergyProfileGroup"].dropna().unique())
+
+group_results = []
+
+for group in groups:
+    mask = X_test["EnergyProfileGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    y_pred_group = best_model.predict(X_group)
+
+    group_results.append(
+        {
+            "EnergyProfileGroup": group,
+            "n": len(X_group),
+            "y_mean": y_group.mean(),
+            "r2": r2_score(y_group, y_pred_group),
+            "rmse": mean_squared_error(y_group, y_pred_group) ** 0.5,
+            "mae": mean_absolute_error(y_group, y_pred_group),
+            "mape": mean_absolute_percentage_error(y_group, y_pred_group),
+            "rmse_over_mean": (mean_squared_error(y_group, y_pred_group) ** 0.5)
+            / y_group.mean(),
+        }
+    )
+
+group_results_df = pd.DataFrame(group_results).sort_values("rmse")
+
+
+for group in groups:
+    mask = X_test["EnergyProfileGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    plot_regression_predictions(
+        best_model, X_group, y_group, title=f"Predicted vs Target - {group}"
+    )
+
+
+for group in groups:
+    mask = X_test["EnergyProfileGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    plot_regression_error(
+        best_model,
+        X_group,
+        y_group,
+        xlim=(-1e7, 1e7),
+        title=f"Distribution of Regression Errors - {group}",
+    )
+
+for group in groups:
+    mask = X_test["EnergyProfileGroup"] == group
+
+    X_group = X_test.loc[mask, col_sel].copy()
+    y_group = y_test.loc[mask].copy()
+
+    if len(X_group) < 5:
+        continue
+
+    y_pred_group = best_model.predict(X_group)
+
+    plot_absolute_error_distribution(
+        y_group, y_pred_group, title=f"Absolute Error Distribution - {group}"
+    )
