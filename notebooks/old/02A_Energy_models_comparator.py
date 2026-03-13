@@ -13,7 +13,7 @@ import time
 # =========================
 import lightgbm as lgb
 from catboost import CatBoostRegressor
-import shap
+from pycaret.regression import *
 
 # =========================
 # Visualisation
@@ -117,10 +117,6 @@ df["ZipCode"] = df["ZipCode"].astype("category")
 df.info()
 df.shape
 
-df["floors_log"] = np.log1p(df["NumberofFloors"])
-df["building_log"] = np.log1p(df["NumberofBuildings"])
-df["nb_use_log"] = np.log1p(df["nb_property_uses"])
-
 # *****************************************
 # *        SELECTION DES FEATURES         *
 # *****************************************
@@ -141,9 +137,6 @@ robust_features = [
     "nb_property_uses",
     "buildings_gfa_ratio",
     "parking_gfa_ratio",
-    #    "floors_log",
-    #    "building_log",
-    #    "nb_use_log"
 ]
 
 categorical_features = [
@@ -466,16 +459,16 @@ for train_idx, test_idx in cv.split(X_train):
     mae_tr.append(mean_absolute_error(y_tr, y_pred_tr))
     mae_te.append(mean_absolute_error(y_te, y_pred_te))
 
-print("R² train CV mean :", np.mean(scores_tr).round(3))
-print("R² test  CV mean :", np.mean(scores_te).round(3))
-print("R² train CV std  :", np.std(scores_tr).round(3))
-print("R² test  CV std  :", np.std(scores_te).round(3))
+    print("R² train CV mean :", np.mean(scores_tr).round(3))
+    print("R² test  CV mean :", np.mean(scores_te).round(3))
+    print("R² train CV std  :", np.std(scores_tr).round(3))
+    print("R² test  CV std  :", np.std(scores_te).round(3))
 
-print("RMSE train CV mean :", np.mean(rmse_tr).round(0))
-print("RMSE test  CV mean :", np.mean(rmse_te).round(0))
+    print("RMSE train CV mean :", np.mean(rmse_tr).round(0))
+    print("RMSE test  CV mean :", np.mean(rmse_te).round(0))
 
-print("MAE train CV mean :", np.mean(mae_tr).round(0))
-print("MAE test  CV mean :", np.mean(mae_te).round(0))
+    print("MAE train CV mean :", np.mean(mae_tr).round(0))
+    print("MAE test  CV mean :", np.mean(mae_te).round(0))
 
 # ? Le modèle CatBoost standard avec transformation logarithmique de la cible présente
 # ? la meilleure capacité de généralisation selon le coefficient de détermination,
@@ -660,71 +653,6 @@ plot_error_vs_target(y_test, y_pred)
 
 plt.scatter(np.log1p(y_test), np.log1p(y_pred))
 
-# ==================================================
-# ! Conclusion - Modélisation de la consommation énergétique
-# ==================================================
-
-# Un modèle de régression basé sur CatBoost a été entraîné afin
-# de prédire la variable cible `SiteEnergyUse(kBtu)`, qui correspond
-# à la consommation énergétique annuelle des bâtiments.
-#
-# Afin de stabiliser la variance de la cible et de mieux capturer
-# les relations entre les variables explicatives et la consommation
-# énergétique, une transformation logarithmique de la cible a été
-# appliquée lors de l'entraînement du modèle.
-#
-# Les performances obtenues montrent une bonne capacité de
-# généralisation :
-#
-# - R² = 0.83 sur les données d'entraînement
-# - R² = 0.717 sur les données de test
-#
-# Cela signifie que le modèle explique environ 70 % de la variance
-# de la consommation énergétique des bâtiments.
-#
-# Les métriques d'erreur restent raisonnables pour ce type de
-# problème :
-#
-# - RMSE ≈ 6.46 millions de kBtu
-# - MAE ≈ 2.85 millions de kBtu
-#
-# L'évaluation par validation croisée confirme la robustesse
-# du modèle :
-#
-# - R² train CV moyen : 0.836
-# - R² test CV moyen : 0.654
-#
-# La faible variance des scores entre les folds indique que le
-# modèle reste relativement stable selon les sous-échantillons
-# utilisés pour l'entraînement.
-#
-# L'analyse des prédictions montre une bonne corrélation entre
-# les valeurs réelles et prédites. Toutefois, les bâtiments ayant
-# les consommations énergétiques les plus élevées sont légèrement
-# sous-estimés par le modèle, ce qui est un comportement classique
-# dans les problèmes de régression avec des distributions très
-# asymétriques.
-#
-# L'étude des résidus indique que les erreurs sont globalement
-# centrées autour de zéro, ce qui suggère l'absence de biais
-# systématique dans les prédictions. En revanche, la dispersion
-# des erreurs augmente pour les bâtiments très énergivores,
-# phénomène d'hétéroscédasticité fréquent dans les données
-# énergétiques.
-#
-# Enfin, l'analyse de l'importance des variables montre que la
-# surface totale du bâtiment (`PropertyGFATotal`) constitue le
-# facteur explicatif principal de la consommation énergétique.
-# Les variables décrivant le profil énergétique et le type de
-# bâtiment jouent également un rôle significatif.
-#
-# En conclusion, le modèle CatBoost avec transformation
-# logarithmique de la cible constitue une base solide pour
-# modéliser la consommation énergétique des bâtiments.
-# Il capture correctement les relations structurelles présentes
-# dans les données et présente de bonnes performances de
-# généralisation.
-
 # *************************************************
 # *     Comparaison par PrimaryPropertyGroup      *
 # *************************************************
@@ -860,57 +788,6 @@ plt.ylabel("PropertyGFATotal bin")
 plt.tight_layout()
 plt.show()
 
-# ==========================================================
-# Analyse des performances du modèle selon la taille des bâtiments
-# ==========================================================
-#
-# Afin d'analyser plus finement le comportement du modèle,
-# les prédictions ont été étudiées en segmentant les bâtiments
-# selon des intervalles de surface totale (`PropertyGFATotal`).
-#
-# L'objectif de cette analyse est de vérifier si le modèle
-# présente des biais de prédiction selon la taille des bâtiments,
-# ce qui est fréquent dans les problèmes de modélisation
-# de consommation énergétique.
-#
-# Les graphiques "Predicted vs Target" par bin montrent que
-# le modèle capture globalement la relation entre la consommation
-# énergétique et la surface du bâtiment. Les prédictions restent
-# relativement proches de la diagonale idéale pour la majorité
-# des observations.
-#
-# Pour les bâtiments de petite et moyenne taille, les erreurs
-# restent généralement limitées et les prédictions apparaissent
-# bien distribuées autour de la valeur réelle.
-#
-# En revanche, pour les bâtiments de très grande surface,
-# on observe une dispersion plus importante des prédictions
-# et une tendance à sous-estimer les consommations énergétiques
-# les plus élevées. Ce comportement est classique dans les
-# modèles de régression appliqués à des données présentant
-# une distribution fortement asymétrique.
-#
-# L'analyse des distributions d'erreurs par intervalle de
-# `PropertyGFATotal` montre que les résidus restent globalement
-# centrés autour de zéro, ce qui suggère l'absence de biais
-# systématique du modèle. Toutefois, l'amplitude des erreurs
-# augmente progressivement avec la taille des bâtiments,
-# ce qui traduit une hétéroscédasticité naturelle dans
-# les données énergétiques.
-#
-# En résumé, le modèle conserve des performances cohérentes
-# sur l'ensemble des catégories de bâtiments, mais sa précision
-# diminue légèrement pour les structures les plus grandes,
-# dont les consommations énergétiques sont également les plus
-# variables.
-#
-# Cette analyse confirme que la surface totale du bâtiment
-# est un facteur structurant de la consommation énergétique
-# et qu'une segmentation par taille peut être pertinente
-# pour interpréter plus finement les performances du modèle.
-#
-# ==========================================================
-
 # *************************************************
 # *          Fonction pour comparaison            *
 # *************************************************
@@ -958,6 +835,7 @@ def analyze_model_by_numeric_feature_bins(
                 "mae": mean_absolute_error(y_group, y_pred_group),
                 "mape": mean_absolute_percentage_error(y_group, y_pred_group),
                 "rmse_over_mean": (mean_squared_error(y_group, y_pred_group) ** 0.5)
+                / y_group.mean()
                 / y_group.mean(),
             }
         )
@@ -966,7 +844,7 @@ def analyze_model_by_numeric_feature_bins(
 
 
 gfa_results_df = analyze_model_by_numeric_feature_bins(
-    model=cat_model,
+    model=best_model,
     X_test=X_test,
     y_test=y_test,
     selected_features=col_sel,
@@ -995,7 +873,7 @@ for group in groups:
     if len(X_group) < 5:
         continue
 
-    y_pred_group = cat_model.predict(X_group)
+    y_pred_group = best_model.predict(X_group)
 
     group_results.append(
         {
@@ -1024,7 +902,7 @@ for group in groups:
         continue
 
     plot_regression_predictions(
-        cat_model, X_group, y_group, title=f"Predicted vs Target - {group}"
+        best_model, X_group, y_group, title=f"Predicted vs Target - {group}"
     )
 
 
@@ -1048,75 +926,6 @@ plt.show()
 
 df.PrimaryPropertyGroup.value_counts()
 
-# ==========================================================
-# Analyse des performances du modèle par type de bâtiment
-# ==========================================================
-#
-# Afin d'évaluer plus finement la robustesse du modèle, les
-# prédictions ont été analysées selon la variable
-# `PrimaryPropertyGroup`, qui regroupe les bâtiments par grands
-# usages fonctionnels (bureaux, éducation, hôtellerie, retail,
-# warehouse, mixed use, etc.).
-#
-# Cette analyse permet de vérifier si le modèle présente des
-# performances homogènes entre les différents segments métier
-# ou s'il existe des catégories de bâtiments plus difficiles
-# à prédire.
-#
-# Les graphiques "Predicted vs Target" montrent que le modèle
-# reproduit correctement la tendance générale pour plusieurs
-# groupes, en particulier lorsque les observations sont
-# relativement concentrées et que les comportements énergétiques
-# sont homogènes.
-#
-# Les segments de type "Office", "MedicalOffice" ou encore une
-# partie des groupes "Education" présentent globalement une
-# relation cohérente entre les valeurs prédites et observées,
-# même si certains écarts restent visibles pour les bâtiments
-# les plus énergivores.
-#
-# En revanche, la dispersion des prédictions est plus forte
-# pour certains groupes comme "LargeOffice", "MixedUse",
-# "Warehouse", "Hotel" ou "Other". Cela suggère que ces
-# catégories regroupent des bâtiments plus hétérogènes, avec
-# des profils de consommation énergétique plus complexes à
-# modéliser.
-#
-# On observe également, pour plusieurs groupes, une tendance à
-# sous-prédire les très fortes consommations énergétiques.
-# Ce comportement est cohérent avec les analyses précédentes :
-# le modèle tend à ramener les valeurs extrêmes vers des niveaux
-# plus centraux, ce qui est fréquent dans les problèmes de
-# régression sur des distributions asymétriques.
-#
-# L'interprétation des résultats doit toutefois tenir compte
-# de la taille des groupes. Certains segments comportent peu
-# d'observations dans l'échantillon de test, ce qui limite la
-# robustesse statistique des conclusions. Dans ces cas, quelques
-# points atypiques peuvent fortement influencer la lecture des
-# graphiques et les métriques associées.
-#
-# Cette analyse met donc en évidence une performance globalement
-# satisfaisante du modèle, mais aussi une variabilité selon le
-# type de bâtiment. Elle suggère que la consommation énergétique
-# dépend non seulement de la taille du bâtiment, mais également
-# de son usage principal, avec des niveaux d'hétérogénéité très
-# différents selon les segments.
-#
-# En conclusion, `PrimaryPropertyGroup` apparaît comme une
-# variable structurante pour expliquer la consommation
-# énergétique. L'analyse par groupe confirme l'intérêt métier
-# de cette variable et ouvre la voie à plusieurs pistes
-# d'amélioration :
-#
-# - enrichir certains groupes trop hétérogènes,
-# - affiner le mapping des catégories initiales,
-# - créer des modèles spécifiques par segment,
-# - ou introduire des variables d'intensité énergétique
-#   adaptées à chaque type de bâtiment.
-#
-# ==========================================================
-
 # *************************************************
 # *      Comparaison par EnergyProfileGroup       *
 # *************************************************
@@ -1134,7 +943,7 @@ for group in groups:
     if len(X_group) < 5:
         continue
 
-    y_pred_group = cat_model.predict(X_group)
+    y_pred_group = best_model.predict(X_group)
 
     group_results.append(
         {
@@ -1163,7 +972,7 @@ for group in groups:
         continue
 
     plot_regression_predictions(
-        cat_model, X_group, y_group, title=f"Predicted vs Target - {group}"
+        best_model, X_group, y_group, title=f"Predicted vs Target - {group}"
     )
 
 
@@ -1177,7 +986,7 @@ for group in groups:
         continue
 
     plot_regression_error(
-        cat_model,
+        best_model,
         X_group,
         y_group,
         xlim=(-1e7, 1e7),
@@ -1193,344 +1002,8 @@ for group in groups:
     if len(X_group) < 5:
         continue
 
-    y_pred_group = cat_model.predict(X_group)
+    y_pred_group = best_model.predict(X_group)
 
     plot_absolute_error_distribution(
         y_group, y_pred_group, title=f"Absolute Error Distribution - {group}"
     )
-
-# ==========================================================
-# Analyse des performances du modèle par EnergyProfileGroup
-# ==========================================================
-#
-# Afin d'examiner le comportement du modèle selon l'intensité
-# énergétique des bâtiments, les prédictions ont été analysées
-# par catégorie de la variable `EnergyProfileGroup`.
-#
-# Cette variable segmente les bâtiments selon leur profil de
-# consommation énergétique (LowEnergy, MediumEnergy,
-# MediumHighEnergy, HighEnergy, etc.), ce qui permet d'évaluer
-# si le modèle conserve des performances homogènes entre les
-# différents niveaux d'intensité énergétique.
-#
-# Les graphiques "Predicted vs Target" montrent que le modèle
-# capture correctement la relation globale entre les valeurs
-# observées et prédites dans la majorité des segments.
-#
-# Pour les groupes "MediumEnergy" et "MediumHighEnergy", qui
-# concentrent une grande partie des observations, les
-# prédictions restent globalement alignées avec la diagonale
-# idéale. Cela indique que le modèle parvient à reproduire
-# correctement les comportements énergétiques les plus
-# représentatifs du dataset.
-#
-# En revanche, les groupes "LowEnergy" et "HighEnergy"
-# présentent une dispersion plus importante des prédictions.
-# Dans ces segments, certaines observations sont fortement
-# sous-estimées ou surestimées par le modèle.
-#
-# Ce phénomène peut s'expliquer par deux facteurs principaux :
-#
-# 1) La taille relativement réduite de certains groupes dans
-#    l'échantillon de test, ce qui rend les estimations plus
-#    sensibles aux observations atypiques.
-#
-# 2) La variabilité intrinsèque des bâtiments aux extrêmes de
-#    consommation énergétique, qui peuvent présenter des
-#    caractéristiques structurelles très différentes
-#    (laboratoires, hôtels, bâtiments industriels, etc.).
-#
-# Comme observé dans les analyses précédentes, les valeurs de
-# consommation les plus élevées restent les plus difficiles à
-# prédire, avec une tendance du modèle à sous-estimer certains
-# cas extrêmes.
-#
-# Dans l'ensemble, cette analyse confirme que la variable
-# `EnergyProfileGroup` constitue un facteur structurant de la
-# consommation énergétique et qu'elle contribue à capturer
-# une partie importante de l'hétérogénéité du dataset.
-
-# ? ===============================
-# ? Interprétation globale du modèle avec SHAP
-# ? ===============================
-
-# création de l'explainer
-explainer = shap.TreeExplainer(cat_model.regressor_)
-
-# calcul des valeurs SHAP
-shap_values = explainer.shap_values(X_test)
-
-shap.summary_plot(shap_values, X_test, plot_type="dot")
-
-# ==========================================================
-# Interprétation du modèle avec SHAP
-# ==========================================================
-#
-# Afin d'interpréter les prédictions du modèle CatBoost,
-# une analyse des valeurs SHAP (SHapley Additive Explanations)
-# a été réalisée. Cette méthode permet de quantifier la
-# contribution de chaque variable aux prédictions du modèle.
-#
-# Le graphique SHAP summary présente l'importance globale des
-# variables ainsi que la direction de leur influence sur les
-# prédictions.
-#
-# Les résultats montrent que `PropertyGFATotal` constitue
-# de loin la variable la plus influente du modèle. Les valeurs
-# élevées de surface (points rouges) contribuent positivement
-# aux prédictions de consommation énergétique, tandis que les
-# surfaces plus faibles (points bleus) ont un impact négatif
-# sur la prédiction.
-#
-# Ce comportement est cohérent avec l'interprétation physique
-# du problème : plus la surface d'un bâtiment est importante,
-# plus sa consommation énergétique totale est susceptible
-# d'être élevée.
-#
-# Les variables `EnergyProfileGroup` et `PrimaryPropertyGroup`
-# apparaissent également comme des facteurs explicatifs
-# significatifs. Elles permettent au modèle d'ajuster les
-# prédictions selon le profil énergétique et le type
-# fonctionnel du bâtiment.
-#
-# Les autres variables (nombre d'étages, ratios de surface,
-# nombre d'usages du bâtiment, distance au centre-ville)
-# jouent un rôle plus secondaire et apportent principalement
-# des ajustements locaux dans les prédictions.
-#
-# Dans l'ensemble, l'analyse SHAP confirme que le modèle
-# capture correctement les relations structurelles entre
-# les caractéristiques des bâtiments et leur consommation
-# énergétique.
-#
-# ==========================================================
-
-
-# ===============================
-# Effet de la taille des bâtiments (log_gfa)
-# ===============================
-
-shap.dependence_plot(
-    "PropertyGFATotal", shap_values, X_test, interaction_index="EnergyProfileGroup"
-)
-
-shap.dependence_plot(
-    ind="PropertyGFATotal",
-    shap_values=shap_values,
-    features=X_test,
-    interaction_index="PrimaryPropertyGroup",
-)
-
-shap.dependence_plot(
-    ind="PropertyGFATotal",
-    shap_values=shap_values,
-    features=X_test,
-    interaction_index="NumberofFloors",
-)
-
-
-shap.dependence_plot(
-    ind="PropertyGFATotal",
-    shap_values=shap_values,
-    features=X_test,
-    interaction_index="nb_property_uses",
-)
-
-
-shap.dependence_plot(
-    ind="PropertyGFATotal",
-    shap_values=shap_values,
-    features=X_test,
-    interaction_index="dist_downtown",
-)
-
-# ==========================================================
-# ! Analyse des interactions entre variables (SHAP dependence)
-# ==========================================================
-#
-# Les SHAP dependence plots permettent d'analyser l'effet
-# marginal d'une variable sur les prédictions du modèle
-# ainsi que ses interactions potentielles avec d'autres
-# variables explicatives.
-#
-# L'analyse réalisée sur `PropertyGFATotal` montre que cette
-# variable constitue le principal moteur des prédictions du
-# modèle. L'effet de la surface totale du bâtiment sur la
-# consommation énergétique est fortement non linéaire :
-#
-# - pour les petites surfaces, l'augmentation de la surface
-#   entraîne une forte hausse de la contribution SHAP
-# - pour les très grands bâtiments, l'effet marginal diminue
-#   progressivement
-#
-# Ce comportement peut s'expliquer par des économies
-# d'échelle énergétiques dans les grands bâtiments.
-#
-# L'interaction avec `EnergyProfileGroup` montre que,
-# pour une même surface, certains profils énergétiques
-# contribuent davantage à la consommation prédite.
-# Cela confirme que l'intensité énergétique du bâtiment
-# constitue un facteur déterminant de la consommation.
-#
-# L'interaction avec `PrimaryPropertyGroup` indique que
-# l'effet de la surface varie également selon le type
-# fonctionnel du bâtiment (bureaux, hôtels, laboratoires,
-# bâtiments mixtes, etc.).
-#
-# En revanche, les variables telles que `NumberofFloors`,
-# `nb_property_uses` ou `dist_downtown` présentent des
-# interactions plus faibles avec la surface et jouent
-# principalement un rôle d'ajustement secondaire dans
-# les prédictions du modèle.
-#
-# Dans l'ensemble, ces analyses confirment que le modèle
-# capture correctement les relations structurelles entre
-# la taille des bâtiments, leur usage et leur intensité
-# énergétique.
-#
-# ==========================================================
-
-# modèle CatBoost interne
-cb_model = cat_model.regressor_
-
-# explainer
-explainer = shap.TreeExplainer(cb_model)
-
-# shap values sur X_test
-shap_values = explainer(X_test)
-
-# Plusb grosse erreur absolue
-
-errors = pd.DataFrame(
-    {"y_true": y_test, "y_pred": cat_model.predict(X_test)}, index=X_test.index
-)
-
-errors["abs_error"] = (errors["y_true"] - errors["y_pred"]).abs()
-
-worst_idx = errors["abs_error"].idxmax()
-worst_pos = X_test.index.get_loc(worst_idx)
-
-print("Index :", worst_idx)
-print(errors.loc[worst_idx])
-
-shap.plots.waterfall(shap_values[worst_pos], max_display=10)
-
-X_test.loc[[worst_idx]]
-
-print("y_true :", y_test.loc[worst_idx])
-print("y_pred :", errors.loc[worst_idx, "y_pred"])
-print("abs_error :", errors.loc[worst_idx, "abs_error"])
-
-display(X_test.loc[[worst_idx]])
-
-# Les 3 plus grosse erreurs
-
-top3_idx = errors.sort_values("abs_error", ascending=False).head(3).index
-
-for idx in top3_idx:
-    print("=" * 60)
-    print("Observation :", idx)
-    print("y_true :", y_test.loc[idx])
-    print("y_pred :", errors.loc[idx, "y_pred"])
-    print("abs_error :", errors.loc[idx, "abs_error"])
-
-    shap.plots.waterfall(shap_values[X_test.index.get_loc(idx)], max_display=10)
-    plt.show()
-
-pred_log = 15.801
-pred_kbtu = np.expm1(pred_log)
-print(pred_kbtu)
-
-# ==========================================================
-# Analyse des plus fortes erreurs de prédiction
-# ==========================================================
-#
-# L'analyse des observations présentant les plus grandes
-# erreurs absolues montre que le modèle sous-estime
-# principalement certains bâtiments très énergivores.
-#
-# Dans ces cas, la variable `PropertyGFATotal` contribue
-# fortement à la prédiction, mais les variables
-# catégorielles (`PrimaryPropertyGroup`,
-# `EnergyProfileGroup`) restent trop génériques pour
-# capturer certaines spécificités métier.
-#
-# Plusieurs observations montrent par exemple des bâtiments
-# classés dans les catégories `Other` ou `Education`,
-# qui regroupent en réalité des structures très différentes
-# (laboratoires, campus universitaires, bâtiments
-# spécialisés, etc.).
-#
-# Ces résultats suggèrent que la variabilité de la
-# consommation énergétique n'est pas uniquement expliquée
-# par la taille du bâtiment, mais aussi par son intensité
-# énergétique et son usage réel.
-#
-# Des améliorations possibles incluent :
-#
-# - un raffinement du regroupement des types de bâtiments
-# - l'introduction de variables d'intensité énergétique
-# - la création de variables décrivant la complexité
-#   structurelle des bâtiments
-#
-# Cette analyse confirme que le modèle capture correctement
-# les tendances globales, mais que certaines catégories
-# fonctionnelles restent trop hétérogènes pour être
-# modélisées avec précision.
-#
-# ==========================================================
-
-# ! ==========================================================
-# ! Conclusion globale du modèle de prédiction énergétique
-# ! ==========================================================
-#
-# Le modèle CatBoost développé vise à prédire la consommation
-# énergétique des bâtiments (SiteEnergyUse(kBtu)) à partir
-# de caractéristiques structurelles et fonctionnelles.
-#
-# Une transformation logarithmique de la cible a été utilisée
-# afin de stabiliser la variance et de mieux modéliser la
-# distribution fortement asymétrique de la consommation.
-#
-# Les performances obtenues montrent que le modèle explique
-# une part importante de la variabilité énergétique avec un
-# R² d'environ 0.72 sur le jeu de test. Les erreurs absolues
-# restent élevées en raison de la forte dispersion de la
-# consommation et de la présence de bâtiments extrêmement
-# énergivores dans le dataset.
-#
-# L'analyse des importances et des valeurs SHAP indique que
-# la variable la plus influente est `PropertyGFATotal`,
-# représentant la surface totale du bâtiment. L'effet de
-# cette variable est non linéaire : la consommation augmente
-# avec la surface mais l'effet marginal diminue pour les
-# bâtiments les plus grands, ce qui suggère des économies
-# d'échelle énergétiques.
-#
-# Les variables catégorielles telles que `PrimaryPropertyGroup`
-# et `EnergyProfileGroup` permettent d'ajuster les prédictions
-# selon l'usage et le profil énergétique des bâtiments.
-# Certains types de bâtiments (restauration, hôtels, etc.)
-# présentent une intensité énergétique plus élevée pour une
-# surface équivalente.
-#
-# L'analyse des erreurs montre toutefois que certaines
-# sous-estimations importantes concernent des bâtiments très
-# énergivores dont les caractéristiques spécifiques ne sont
-# pas entièrement capturées par les variables disponibles.
-# Certaines catégories génériques regroupent en effet des
-# usages très hétérogènes.
-#
-# Des améliorations possibles incluent :
-# - un raffinement du regroupement des types de bâtiments,
-# - l'ajout de variables décrivant l'intensité énergétique,
-# - la création de variables d'interaction entre surface
-#   et type de bâtiment,
-# - ou le développement de modèles spécifiques par segment.
-#
-# Dans l'ensemble, le modèle capture correctement les
-# relations structurelles entre la taille des bâtiments,
-# leur usage et leur consommation énergétique, et constitue
-# une base solide pour l'analyse énergétique du parc étudié.
-#
-# ==========================================================

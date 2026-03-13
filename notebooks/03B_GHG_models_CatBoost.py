@@ -14,6 +14,7 @@ import time
 import lightgbm as lgb
 from catboost import CatBoostRegressor
 import shap
+import optuna
 
 # =========================
 # Visualisation
@@ -61,6 +62,7 @@ from sklearn.model_selection import (
     RandomizedSearchCV,
     cross_val_score,
     RepeatedKFold,
+    KFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
@@ -78,6 +80,7 @@ from xgboost import XGBRegressor
 import colorama
 
 import sys
+
 print(sys.executable)
 
 
@@ -170,7 +173,7 @@ categorical_features = [c for c in map(str, categorical_features) if c in X.colu
 X.info()
 
 # *****************************************
-# *           TRAIN TEST SPLIT            *
+# *            SPLIT & SCALE              *
 # *****************************************
 
 seed = 42
@@ -180,6 +183,39 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=seed
 )
 
+# 3) Scalling
+
+standard_pipeline = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ]
+)
+
+robust_pipeline = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("outliers", ot.OutlierLogCapper(cap_factor=3.0, log_skew_threshold=1.0)),
+        ("scaler", RobustScaler()),
+    ]
+)
+
+categorical_pipeline = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=True)),
+    ]
+)
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("num_std", standard_pipeline, standard_features),
+        ("num_rob", robust_pipeline, robust_features),
+        ("cat", categorical_pipeline, categorical_features),
+    ],
+    remainder="drop",
+)
+
 # *****************************************
 # *         Parte 1 :: modele de base     *
 # *****************************************
@@ -187,7 +223,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 cat_features_idx = [X_train.columns.get_loc(col) for col in categorical_features]
 
 regressor = CatBoostRegressor(
-    random_state=seed, loss_function="RMSE", eval_metric="RMSE", verbose=0
+    random_state=seed, loss_function="RMSE", eval_metric="RMSE", verbose=0, depth=6
 )
 
 cat_model = TransformedTargetRegressor(
@@ -359,6 +395,84 @@ print("CatBoost params nettoyés :", cat_random_params)
 #  'random_strength': np.float64(0.8220740266364626)}
 
 # *************************************************
+# *              Parte 5 :: Optuna                *
+# *************************************************
+
+
+def objective(trial):
+    params = {
+        "random_state": 42,
+        "loss_function": "RMSE",
+        "eval_metric": "RMSE",
+        "verbose": 0,
+        "iterations": trial.suggest_int("iterations", 300, 2000),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-2, 0.15, log=True),
+        "depth": trial.suggest_int("depth", 3, 8),
+        "l2_leaf_reg": trial.suggest_int("l2_leaf_reg", 1, 10),
+        "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 2.0),
+        "random_strength": trial.suggest_float("random_strength", 1e-3, 10.0, log=True),
+        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 1, 30),
+    }
+
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    rmse_scores = []
+
+    for train_idx, valid_idx in cv.split(X_train):
+        X_tr = X_train.iloc[train_idx].copy()
+        X_va = X_train.iloc[valid_idx].copy()
+        y_tr = y_train.iloc[train_idx].copy()
+        y_va = y_train.iloc[valid_idx].copy()
+
+        cat_features_idx_cv = [
+            X_tr.columns.get_loc(col) for col in categorical_features
+        ]
+
+        regressor = CatBoostRegressor(**params)
+
+        model = TransformedTargetRegressor(
+            regressor=regressor, func=np.log1p, inverse_func=np.expm1
+        )
+
+        model.fit(X_tr, y_tr, cat_features=cat_features_idx_cv)
+
+        y_pred = model.predict(X_va)
+
+        rmse = np.sqrt(mean_squared_error(y_va, y_pred))
+        rmse_scores.append(rmse)
+
+    return np.mean(rmse_scores)
+
+
+study = optuna.create_study(direction="minimize")
+study.optimize(objective, n_trials=50, show_progress_bar=True)
+
+print("Best RMSE CV:", round(study.best_value, 3))
+print("Best params:", study.best_params)
+
+best_params = study.best_params.copy()
+best_params.update(
+    {"random_state": seed, "loss_function": "RMSE", "eval_metric": "RMSE", "verbose": 0}
+)
+
+best_regressor = CatBoostRegressor(**best_params)
+
+optuna_cat_model = TransformedTargetRegressor(
+    regressor=best_regressor, func=np.log1p, inverse_func=np.expm1
+)
+
+optuna_cat_model.fit(X_train, y_train, cat_features=cat_features_idx)
+
+y_pred_train = optuna_cat_model.predict(X_train)
+y_pred_test = optuna_cat_model.predict(X_test)
+
+print(f"R² train : {r2_score(y_train, y_pred_train):.3f}")
+print(f"R² test  : {r2_score(y_test, y_pred_test):.3f}")
+print(f"RMSE train : {np.sqrt(mean_squared_error(y_train, y_pred_train)):.1f}")
+print(f"RMSE test  : {np.sqrt(mean_squared_error(y_test, y_pred_test)):.1f}")
+print(f"MAE train : {mean_absolute_error(y_train, y_pred_train):.1f}")
+print(f"MAE test  : {mean_absolute_error(y_test, y_pred_test):.1f}")
+
+# *************************************************
 # *                   BEST_MODELE                 *
 # *************************************************
 
@@ -421,10 +535,10 @@ for train_idx, test_idx in cv.split(X_train):
         X_tr.columns.get_loc(col) for col in categorical_features if col in X_tr.columns
     ]
 
-    best_cat_model.fit(X_tr, y_tr, cat_features=cat_features_idx_fold)
+    optuna_cat_model.fit(X_tr, y_tr, cat_features=cat_features_idx_fold)
 
-    y_pred_tr = best_cat_model.predict(X_tr)
-    y_pred_te = best_cat_model.predict(X_te)
+    y_pred_tr = optuna_cat_model.predict(X_tr)
+    y_pred_te = optuna_cat_model.predict(X_te)
 
     scores_tr.append(r2_score(y_tr, y_pred_tr))
     scores_te.append(r2_score(y_te, y_pred_te))
@@ -998,14 +1112,10 @@ for gfa_bin in gfa_bins:
 # ?    Intéraction énergie / taille / émissions    *
 # ? ************************************************
 
-plt.figure(figsize=(8,6))
+plt.figure(figsize=(8, 6))
 
 scatter = plt.scatter(
-    X_test["elec_prop"],
-    y_test,
-    c=X_test["log_gfa"],
-    cmap="viridis",
-    alpha=0.7
+    X_test["elec_prop"], y_test, c=X_test["log_gfa"], cmap="viridis", alpha=0.7
 )
 
 plt.colorbar(scatter, label="log_gfa")
@@ -1048,11 +1158,6 @@ plt.show()
 # pourquoi les variables log_gfa et elec_prop apparaissent comme
 # les plus importantes dans le modèle CatBoost.
 
-# création de l'explainer
-explainer = shap.TreeExplainer(best_cat_model.regressor_)
-
-# calcul des valeurs SHAP
-shap_values = explainer.shap_values(X_test)
 
 # ? ************************************************
 # ?      Comparaison par tranches de PrimaryPropertyType
@@ -1126,11 +1231,13 @@ for group in groups:
 # ? Interprétation globale du modèle avec SHAP
 # ? ===============================
 
-shap.summary_plot(
-    shap_values,
-    X_test,
-    plot_type="dot"
-)
+# création de l'explainer
+explainer = shap.TreeExplainer(best_cat_model.regressor_)
+
+# calcul des valeurs SHAP
+shap_values = explainer.shap_values(X_test)
+
+shap.summary_plot(shap_values, X_test, plot_type="dot")
 
 # Le graphique SHAP summary plot permet d'analyser l'importance des variables
 # ainsi que leur influence sur les prédictions du modèle CatBoost.
@@ -1158,16 +1265,11 @@ shap.summary_plot(
 # à effet de serre.
 
 
-
 # ===============================
 # Effet de la taille des bâtiments (log_gfa)
 # ===============================
 
-shap.dependence_plot(
-    "log_gfa",
-    shap_values,
-    X_test
-)
+shap.dependence_plot("log_gfa", shap_values, X_test)
 
 # Le graphique SHAP dependence plot met en évidence la relation entre
 # log_gfa et son impact sur les prédictions du modèle.
@@ -1188,12 +1290,7 @@ shap.dependence_plot(
 # Interaction entre log_gfa et elec_prop
 # ===============================
 
-shap.dependence_plot(
-    "log_gfa",
-    shap_values,
-    X_test,
-    interaction_index="elec_prop"
-)
+shap.dependence_plot("log_gfa", shap_values, X_test, interaction_index="elec_prop")
 
 # Le graphique montre l'interaction entre la taille des bâtiments
 # (log_gfa) et la proportion d'électricité dans le mix énergétique
@@ -1243,12 +1340,7 @@ error_df["error"] = errors
 
 error_df.sort_values("error", ascending=False).head(10)
 
-regressor = CatBoostRegressor(
-    iterations=500,
-    depth=4,
-    learning_rate=0.05,
-    verbose=0
-)
+regressor = CatBoostRegressor(iterations=500, depth=4, learning_rate=0.05, verbose=0)
 
 error_model = TransformedTargetRegressor(
     regressor=regressor, func=np.log1p, inverse_func=np.expm1
@@ -1290,7 +1382,6 @@ shap.summary_plot(shap_values_error, X_test)
 # Globalement, les erreurs du modèle semblent principalement associées
 # aux bâtiments de grande taille et aux configurations énergétiques
 # plus complexes.
-
 
 
 # ===============================

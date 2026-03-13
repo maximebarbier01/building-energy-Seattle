@@ -301,7 +301,7 @@ regressor = XGBRegressor(
     objective="reg:squarederror",
     n_estimators=1000,
     learning_rate=0.03,
-    max_depth=4,
+    max_depth=6,  # TODO tester 6 et 7
     min_child_weight=5,
     subsample=0.8,
     colsample_bytree=0.8,
@@ -333,9 +333,9 @@ print(
 print(f"RMSE : {mean_squared_error(y_test, y_pred)**0.5:.4}")
 print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
-# ! R² : 0.849 (train) et  0.663  (test)
-# ! RMSE : 7.052e+06
-# ! MAE : 3.128e+06
+# ! R² : 0.920 (train) et  0.678  (test)
+# ! RMSE : 6.894e+06
+# ! MAE : 3.171e+06
 
 # **************************************************
 # *         Parte 2 :: modele anti-overfitting     *
@@ -345,7 +345,7 @@ regressor = XGBRegressor(
     objective="reg:squarederror",
     n_estimators=800,
     learning_rate=0.03,
-    max_depth=3,
+    max_depth=6,
     min_child_weight=10,
     subsample=0.7,
     colsample_bytree=0.7,
@@ -388,7 +388,7 @@ print(f"MAE : {mean_absolute_error(y_test, y_pred):.4}")
 
 # Grid Search CV
 param_grid = {
-    "model__regressor__max_depth": [3, 4, 5],
+    "model__regressor__max_depth": [4, 5],
     "model__regressor__min_child_weight": [3, 5, 10],
     "model__regressor__subsample": [0.7, 0.8, 1.0],
     "model__regressor__colsample_bytree": [0.7, 0.8, 1.0],
